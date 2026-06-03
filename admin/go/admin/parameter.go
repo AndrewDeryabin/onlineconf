@@ -518,6 +518,11 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 		return ErrVersionNotMatch
 	}
 
+	if err = freeDeletedPath(ctx, tx, newPath); err != nil {
+		tx.Rollback()
+		return err
+	}
+
 	_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET ParentID = ?, Name = ?, Version = Version + 1, MTime = now() WHERE Path = ?", newParent.ID, newName, path)
 	if err == nil {
 		likePath := likeEscape(p.Path) + "/%"
@@ -546,6 +551,33 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 		return err
 	}
 	return tx.Commit()
+}
+
+// freeDeletedPath frees up a Path occupied by a soft-deleted row so it can be
+// reused by another node moved or created there. Soft-deletion keeps the row
+// with its original Path intact, and Path has a UNIQUE constraint, so without
+// this any move whose destination matches a previously-deleted node would
+// fail with a duplicate-key error. The row's Name is suffixed with its ID
+// (guaranteed unique) and the my_config_tree_move trigger recomputes Path;
+// descendants are then forced to recompute their paths through the same
+// trigger by setting their Path to ''.
+func freeDeletedPath(ctx context.Context, tx *sql.Tx, path string) error {
+	res, err := tx.ExecContext(ctx,
+		"UPDATE my_config_tree SET Name = CONCAT(Name, '#', ID) WHERE Path = ? AND Deleted = true",
+		path)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return nil
+	}
+	likePath := likeEscape(path) + "/%"
+	_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET Path = '' WHERE Path LIKE ?", likePath)
+	return err
 }
 
 func SetParameterDescription(ctx context.Context, path string, summary, description string) error {
