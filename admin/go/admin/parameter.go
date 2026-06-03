@@ -25,6 +25,7 @@ var (
 	ErrVersionNotMatch = errors.New("Version not match")
 	ErrCommentRequired = errors.New("Comment required")
 	ErrInvalidValue    = errors.New("Invalid value")
+	ErrInvalidPath     = errors.New("Invalid path")
 	ErrNotEmpty        = errors.New("Parameter has children")
 	ErrNotFound        = errors.New("Parameter not found")
 	ErrParentNotFound  = errors.New("Parent not found")
@@ -329,7 +330,10 @@ func SelectWithChildrenMulti(ctx context.Context, paths []string) (map[string]*P
 			}
 		}
 		if p.Path != "/" {
-			parentPath, _ := splitPath(p.Path)
+			parentPath, _, err := splitPath(p.Path)
+			if err != nil {
+				return nil, err
+			}
 			if _, ok := result[parentPath]; ok {
 				result[parentPath].Children = append(result[parentPath].Children, p)
 			}
@@ -402,12 +406,16 @@ func CreateParameter(ctx context.Context, path, contentType, value string, optSu
 		}
 	}
 
+	parentPath, name, err := splitPath(path)
+	if err != nil {
+		return err
+	}
+
 	tx, err := DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 
-	parentPath, name := splitPath(path)
 	parent, err := selectParameterForUpdate(ctx, tx, parentPath)
 	if err != nil {
 		tx.Rollback()
@@ -492,7 +500,10 @@ func SetParameter(ctx context.Context, path string, version int, contentType str
 }
 
 func MoveParameter(ctx context.Context, path string, newPath string, symlink bool, version int, comment string) error {
-	newParentPath, newName := splitPath(newPath)
+	newParentPath, newName, err := splitPath(newPath)
+	if err != nil {
+		return err
+	}
 
 	tx, err := DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -554,26 +565,30 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 }
 
 // freeDeletedPath frees up a Path occupied by a soft-deleted row so it can be
-// reused by another node moved or created there. Soft-deletion keeps the row
-// with its original Path intact, and Path has a UNIQUE constraint, so without
-// this any move whose destination matches a previously-deleted node would
-// fail with a duplicate-key error. The row's Name is suffixed with its ID
-// (guaranteed unique) and the my_config_tree_move trigger recomputes Path;
-// descendants are then forced to recompute their paths through the same
-// trigger by setting their Path to ''.
+// reused by another node moved there. Soft-deletion keeps the row with its
+// original Path intact, and Path has a UNIQUE constraint, so without this any
+// move whose destination matches a previously-deleted node would fail with a
+// duplicate-key error. The row's Name is suffixed with its ID (guaranteed
+// unique) and the my_config_tree_move trigger recomputes Path; descendants
+// are then forced to recompute their paths through the same trigger by
+// setting their Path to ''. If the path is occupied by a live node,
+// ErrAlreadyExists is returned.
 func freeDeletedPath(ctx context.Context, tx *sql.Tx, path string) error {
-	res, err := tx.ExecContext(ctx,
-		"UPDATE my_config_tree SET Name = CONCAT(Name, '#', ID) WHERE Path = ? AND Deleted = true",
-		path)
-	if err != nil {
-		return err
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
+	row := tx.QueryRowContext(ctx, "SELECT ID, Deleted FROM my_config_tree WHERE Path = ? FOR UPDATE", path)
+	var id int
+	var deleted bool
+	err := row.Scan(&id, &deleted)
+	if err == sql.ErrNoRows {
 		return nil
+	} else if err != nil {
+		return err
+	}
+	if !deleted {
+		return ErrAlreadyExists
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET Name = CONCAT(Name, '#', ID) WHERE ID = ?", id)
+	if err != nil {
+		return err
 	}
 	likePath := likeEscape(path) + "/%"
 	_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET Path = '' WHERE Path LIKE ?", likePath)

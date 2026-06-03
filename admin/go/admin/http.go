@@ -20,6 +20,7 @@ var writeError = WriteErrorFunc(map[error]ErrorResponse{
 	ErrVersionNotMatch: {HTTPCode: 400, ErrorCode: "VersionNotMatch"},
 	ErrCommentRequired: {HTTPCode: 400, ErrorCode: "CommentRequired"},
 	ErrInvalidValue:    {HTTPCode: 400, ErrorCode: "InvalidValue"},
+	ErrInvalidPath:     {HTTPCode: 400, ErrorCode: "InvalidPath"},
 	ErrNotEmpty:        {HTTPCode: 400, ErrorCode: "NotEmpty"},
 	ErrNotFound:        {HTTPCode: 404, ErrorCode: "NotFound"},
 	ErrParentNotFound:  {HTTPCode: 400, ErrorCode: "ParentNotFound"},
