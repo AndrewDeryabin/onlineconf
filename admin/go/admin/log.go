@@ -56,11 +56,21 @@ var avatars = []rune("🐀🐁🐂🐃🐄🐅🐆🐇🐈🐉🐊🐋🐌🐍�
 
 func SelectLog(ctx context.Context, filter LogFilter, lastID int) ([]LogEntry, error) {
 	condition := make([]string, 0)
-	bind := []interface{}{Username(ctx)}
+	bind := make([]interface{}, 0)
 
+	pathCol := "t.Path"
 	if filter.Path != "" {
-		condition = append(condition, "t.Path = ?")
+		// Match the node currently occupying the path as well as soft-deleted
+		// former occupants renamed aside by freeDeletedPath (their Path is
+		// "<path>#<ID>"). All of them are incarnations of the queried path,
+		// so their entries are returned labeled with it.
+		pathCol = "?"
 		bind = append(bind, filter.Path)
+	}
+	bind = append(bind, Username(ctx))
+	if filter.Path != "" {
+		condition = append(condition, "(t.Path = ? OR (t.Path LIKE ? AND t.Deleted AND t.Path = CONCAT(?, '#', t.ID)))")
+		bind = append(bind, filter.Path, likeEscape(filter.Path)+"#%", filter.Path)
 	}
 	if filter.Author != "" {
 		condition = append(condition, "l.Author = ?")
@@ -92,7 +102,7 @@ func SelectLog(ctx context.Context, filter LogFilter, lastID int) ([]LogEntry, e
 
 	query := `
 		SELECT
-			l.ID, l.NodeID, t.Path, l.Version, l.ContentType, l.Value, l.MTime, l.Author, l.Comment, l.Deleted,
+			l.ID, l.NodeID, ` + pathCol + ` AS Path, l.Version, l.ContentType, l.Value, l.MTime, l.Author, l.Comment, l.Deleted,
 			my_config_tree_access(t.ID, ?) AS RW,
 			l.ContentType = t.ContentType AND ((l.Value IS NULL AND t.Value IS NULL) OR l.Value = t.Value) AND l.Deleted = t.Deleted AS Same
 		FROM my_config_tree_log l JOIN my_config_tree t ON t.ID = l.NodeID
