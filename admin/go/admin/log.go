@@ -55,8 +55,8 @@ var avatars = []rune("🐀🐁🐂🐃🐄🐅🐆🐇🐈🐉🐊🐋🐌🐍�
 	"🐿🦀🦁🦂🦃🦄🦅🦆🦇🦈🦉🦊🦋🦌🦍🦎🦏🦐🦑🦒🦓🦔🦕🦖🦗🦘🦙🦚🦛🦜🦝🦞🦟🦠🦡🦢🦥🦦🦧🦨🦩")
 
 func SelectLog(ctx context.Context, filter LogFilter, lastID int) ([]LogEntry, error) {
-	condition := make([]string, 0)
-	bind := make([]interface{}, 0)
+	condition := make([]string, 0, 7)  // at most one per LogFilter field plus lastID
+	bind := make([]interface{}, 0, 10) // Username, three for the path match, one per remaining filter
 
 	pathCol := "t.Path"
 	if filter.Path != "" {

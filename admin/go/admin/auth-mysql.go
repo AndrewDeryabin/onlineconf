@@ -79,8 +79,8 @@ var termRe = regexp.MustCompile("([%_])")
 
 func (auth *mysqlAuthenticator) SelectUsers(ctx context.Context, term string) ([]string, error) {
 	order := "1"
-	condition := make([]string, 0)
-	bind := make([]interface{}, 0)
+	condition := make([]string, 0, 2) // config condition and the term match
+	bind := make([]interface{}, 0, 2) // the term LIKE pattern and the term itself
 	if auth.config.Condition != "" {
 		condition = append(condition, auth.config.Condition)
 	}
