@@ -21,6 +21,7 @@ CREATE TABLE `my_config_tree` (
 CREATE TABLE `my_config_tree_log` (
     `ID` bigint(20) unsigned NOT NULL auto_increment,
     `NodeID` bigint(20) unsigned NOT NULL,
+    `Path` varchar(512) character set ascii collate ascii_bin NOT NULL default '',
     `Version` int(11) NOT NULL,
     `Value` mediumtext character set utf8mb4 collate utf8mb4_bin,
     `ContentType` varchar(255) character set ascii NOT NULL default 'application/x-null',
@@ -31,6 +32,7 @@ CREATE TABLE `my_config_tree_log` (
     PRIMARY KEY  (`ID`),
     UNIQUE KEY `NodeID` (`NodeID`,`Version`),
     KEY `MTime` (`MTime`),
+    KEY `Path` (`Path`),
     CONSTRAINT `my_config_tree_log_ibfk_1` FOREIGN KEY (`NodeID`) REFERENCES `my_config_tree` (`ID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -207,8 +209,8 @@ INSERT INTO `my_config_tree` (`ID`, `Name`, `ParentID`, `Notification`) VALUES
     (3, 'module', 2, NULL),
     (4, 'service', 2, NULL);
 
-INSERT INTO `my_config_tree_log` (`NodeID`, `Version`, `Value`, `ContentType`, `Author`, `MTime`, `Comment`, `Deleted`)
-SELECT `ID`, `Version`, `Value`, `ContentType`, 'onlineconf', `MTime`, 'Init onlineconf', `Deleted` FROM `my_config_tree` ORDER BY `ID`;
+INSERT INTO `my_config_tree_log` (`NodeID`, `Version`, `Value`, `ContentType`, `Author`, `MTime`, `Comment`, `Deleted`, `Path`)
+SELECT `ID`, `Version`, `Value`, `ContentType`, 'onlineconf', `MTime`, 'Init onlineconf', `Deleted`, `Path` FROM `my_config_tree` ORDER BY `ID`;
 
 INSERT INTO `my_config_group` (`Name`) VALUES ('root');
 

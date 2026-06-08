@@ -72,11 +72,10 @@ func selectNotifications(ctx context.Context, lastID, limit int) ([]Notification
 		return nil, ErrLimitTooLarge
 	}
 	query := `
-		SELECT l.ID, l.NodeID, t.Path, l.Version, l.ContentType, l.Value, l.MTime, l.Author, l.Comment,
+		SELECT l.ID, l.NodeID, l.Path, l.Version, l.ContentType, l.Value, l.MTime, l.Author, l.Comment,
 			IF(l.Deleted, 'delete', IFNULL((SELECT 'modify' FROM my_config_tree_log WHERE NodeID = l.NodeID AND Version = l.Version - 1 AND NOT Deleted), 'create')) AS Action,
 			my_config_tree_notification(NodeID) AS Notification
 		FROM my_config_tree_log l
-		JOIN my_config_tree t ON t.ID = l.NodeID
 		WHERE l.ID > ?
 		HAVING Notification <> 'none'
 		ORDER BY l.ID

@@ -30,16 +30,16 @@ INSERT INTO `my_config_tree_group` VALUES (9,4,0);
 INSERT INTO `my_config_tree_group` VALUES (9,5,0);
 INSERT INTO `my_config_tree_group` VALUES (10,2,1);
 
-INSERT INTO `my_config_tree_log` VALUES (1,1,1,NULL,'application/x-null','onlineconf','2019-08-05 17:01:16',NULL,0);
-INSERT INTO `my_config_tree_log` VALUES (2,2,1,NULL,'application/x-null','onlineconf','2019-08-05 17:01:16',NULL,0);
-INSERT INTO `my_config_tree_log` VALUES (3,3,1,NULL,'application/x-null','onlineconf','2019-08-05 17:01:16',NULL,0);
-INSERT INTO `my_config_tree_log` VALUES (4,4,1,NULL,'application/x-null','onlineconf','2019-08-05 17:01:16',NULL,0);
-INSERT INTO `my_config_tree_log` VALUES (5,5,1,NULL,'application/x-null','admin','2019-08-05 17:17:50','Initialize chroot',0);
-INSERT INTO `my_config_tree_log` VALUES (6,6,1,NULL,'application/x-null','admin','2019-08-05 17:24:45','Init infra',0);
-INSERT INTO `my_config_tree_log` VALUES (7,7,1,NULL,'application/x-null','admin','2019-08-05 18:05:39','Init infra',0);
-INSERT INTO `my_config_tree_log` VALUES (8,8,1,'172.0.0.0/8','text/plain','admin','2022-10-24 18:15:21','',0);
-INSERT INTO `my_config_tree_log` VALUES (9,9,1,NULL,'application/x-null','admin','2022-10-24 18:16:21','',0);
-INSERT INTO `my_config_tree_log` VALUES (10,10,1,NULL,'application/x-null','admin','2022-10-24 18:17:21','',0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (1,1,'/',1,NULL,'application/x-null','onlineconf','2019-08-05 17:01:16',NULL,0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (2,2,'/onlineconf',1,NULL,'application/x-null','onlineconf','2019-08-05 17:01:16',NULL,0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (3,3,'/onlineconf/module',1,NULL,'application/x-null','onlineconf','2019-08-05 17:01:16',NULL,0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (4,4,'/onlineconf/service',1,NULL,'application/x-null','onlineconf','2019-08-05 17:01:16',NULL,0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (5,5,'/onlineconf/chroot',1,NULL,'application/x-null','admin','2019-08-05 17:17:50','Initialize chroot',0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (6,6,'/infrastructure',1,NULL,'application/x-null','admin','2019-08-05 17:24:45','Init infra',0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (7,7,'/onlineconf/group',1,NULL,'application/x-null','admin','2019-08-05 18:05:39','Init infra',0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (8,8,'/onlineconf/ephemeral-ip',1,'172.0.0.0/8','text/plain','admin','2022-10-24 18:15:21','',0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (9,9,'/services',1,NULL,'application/x-null','admin','2022-10-24 18:16:21','',0);
+INSERT INTO `my_config_tree_log` (`ID`,`NodeID`,`Path`,`Version`,`Value`,`ContentType`,`Author`,`MTime`,`Comment`,`Deleted`) VALUES (10,10,'/secure',1,NULL,'application/x-null','admin','2022-10-24 18:17:21','',0);
 
 --
 -- Dumping data for table `my_config_user_group`

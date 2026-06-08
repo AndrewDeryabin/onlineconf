@@ -55,29 +55,23 @@ var avatars = []rune("🐀🐁🐂🐃🐄🐅🐆🐇🐈🐉🐊🐋🐌🐍�
 	"🐿🦀🦁🦂🦃🦄🦅🦆🦇🦈🦉🦊🦋🦌🦍🦎🦏🦐🦑🦒🦓🦔🦕🦖🦗🦘🦙🦚🦛🦜🦝🦞🦟🦠🦡🦢🦥🦦🦧🦨🦩")
 
 func SelectLog(ctx context.Context, filter LogFilter, lastID int) ([]LogEntry, error) {
-	condition := make([]string, 0, 7)  // at most one per LogFilter field plus lastID
-	bind := make([]interface{}, 0, 10) // Username, three for the path match, one per remaining filter
+	condition := make([]string, 0, 7) // at most one per LogFilter field plus lastID
+	bind := make([]interface{}, 0, 7) // Username plus one per filter field
 
-	pathCol := "t.Path"
-	if filter.Path != "" {
-		// Match the node currently occupying the path as well as soft-deleted
-		// former occupants renamed aside by freeDeletedPath (their Path is
-		// "<path>#<ID>"). All of them are incarnations of the queried path,
-		// so their entries are returned labeled with it.
-		pathCol = "?"
-		bind = append(bind, filter.Path)
-	}
+	// Each entry is shown at the path it was actually written at (l.Path), so a
+	// path filter naturally returns the history of everything that ever lived
+	// there — the current occupant and any soft-deleted former occupants alike.
 	bind = append(bind, Username(ctx))
 	if filter.Path != "" {
-		condition = append(condition, "(t.Path = ? OR (t.Path LIKE ? AND t.Deleted AND t.Path = CONCAT(?, '#', t.ID)))")
-		bind = append(bind, filter.Path, likeEscape(filter.Path)+"#%", filter.Path)
+		condition = append(condition, "l.Path = ?")
+		bind = append(bind, filter.Path)
 	}
 	if filter.Author != "" {
 		condition = append(condition, "l.Author = ?")
 		bind = append(bind, filter.Author)
 	}
 	if filter.Branch != "" {
-		condition = append(condition, "t.Path LIKE ?")
+		condition = append(condition, "l.Path LIKE ?")
 		bind = append(bind, likeEscape(filter.Branch)+"%")
 	}
 	if filter.From != "" {
@@ -102,7 +96,7 @@ func SelectLog(ctx context.Context, filter LogFilter, lastID int) ([]LogEntry, e
 
 	query := `
 		SELECT
-			l.ID, l.NodeID, ` + pathCol + ` AS Path, l.Version, l.ContentType, l.Value, l.MTime, l.Author, l.Comment, l.Deleted,
+			l.ID, l.NodeID, l.Path, l.Version, l.ContentType, l.Value, l.MTime, l.Author, l.Comment, l.Deleted,
 			my_config_tree_access(t.ID, ?) AS RW,
 			l.ContentType = t.ContentType AND ((l.Value IS NULL AND t.Value IS NULL) OR l.Value = t.Value) AND l.Deleted = t.Deleted AS Same
 		FROM my_config_tree_log l JOIN my_config_tree t ON t.ID = l.NodeID
@@ -137,8 +131,8 @@ func LogLastVersion(ctx context.Context, tx *sql.Tx, path, comment string) error
 		return ErrCommentRequired
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO my_config_tree_log (NodeID, Version, ContentType, Value, Author, MTime, Comment, Deleted)
-		SELECT ID, Version, ContentType, Value, ?, MTime, ?, Deleted
+		INSERT INTO my_config_tree_log (NodeID, Version, ContentType, Value, Author, MTime, Comment, Deleted, Path)
+		SELECT ID, Version, ContentType, Value, ?, MTime, ?, Deleted, Path
 		FROM my_config_tree
 		WHERE Path = ?
 	`, Username(ctx), comment, path)
