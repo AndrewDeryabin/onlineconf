@@ -385,6 +385,7 @@ func SearchParameters(ctx context.Context, term string) ([]Parameter, error) {
 }
 
 func CreateParameter(ctx context.Context, path, contentType, value string, optSummary, optDescription, optNotification NullString, comment string) error {
+	ctx, sink := withNotifications(ctx)
 	var nullValue NullString
 	if contentType != "application/x-null" {
 		nullValue.Valid = true
@@ -460,10 +461,11 @@ func CreateParameter(ctx context.Context, path, contentType, value string, optSu
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return commitAndNotify(ctx, tx, sink)
 }
 
 func SetParameter(ctx context.Context, path string, version int, contentType string, value string, comment string) error {
+	ctx, sink := withNotifications(ctx)
 	var nullValue NullString
 	if contentType != "application/x-null" {
 		nullValue.Valid = true
@@ -496,10 +498,11 @@ func SetParameter(ctx context.Context, path string, version int, contentType str
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return commitAndNotify(ctx, tx, sink)
 }
 
 func MoveParameter(ctx context.Context, path string, newPath string, symlink bool, version int, comment string) error {
+	ctx, sink := withNotifications(ctx)
 	newParentPath, newName, err := splitPath(newPath)
 	if err != nil {
 		return err
@@ -571,7 +574,7 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return commitAndNotify(ctx, tx, sink)
 }
 
 // freeDeletedPath frees up a Path occupied by a soft-deleted row so it can be
@@ -656,6 +659,7 @@ func SetParameterNotification(ctx context.Context, path string, notification str
 }
 
 func DeleteParameter(ctx context.Context, path string, version int, comment string) error {
+	ctx, sink := withNotifications(ctx)
 	tx, err := DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -698,7 +702,7 @@ func DeleteParameter(ctx context.Context, path string, version int, comment stri
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return commitAndNotify(ctx, tx, sink)
 }
 
 type symlink struct {
