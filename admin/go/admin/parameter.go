@@ -539,9 +539,19 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 		likePath := likeEscape(p.Path) + "/%"
 		_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET Path = '' WHERE Path LIKE ?", likePath)
 	}
-
 	if err == nil {
-		err = LogLastVersion(ctx, tx, newPath, fmt.Sprintf("Moved from %s. %s", path, comment))
+		// the rewrite above re-stamps descendants' paths via the trigger but
+		// bumps no version; bump the live ones so each can be logged at its new
+		// path (see LogMovedDescendants)
+		_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET Version = Version + 1, MTime = now() WHERE Path LIKE ? AND NOT Deleted", likeEscape(newPath)+"/%")
+	}
+
+	moveComment := fmt.Sprintf("Moved from %s. %s", path, comment)
+	if err == nil {
+		err = LogLastVersion(ctx, tx, newPath, moveComment)
+	}
+	if err == nil {
+		err = LogMovedDescendants(ctx, tx, newPath, moveComment)
 	}
 
 	if err == nil && symlink {
@@ -571,7 +581,7 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 // duplicate-key error. The row's Name is suffixed with its ID (guaranteed
 // unique) and the my_config_tree_move trigger recomputes Path; descendants
 // are then forced to recompute their paths through the same trigger by
-// setting their Path to ''. If the path is occupied by a live node,
+// setting their Path to ”. If the path is occupied by a live node,
 // ErrAlreadyExists is returned.
 func freeDeletedPath(ctx context.Context, tx *sql.Tx, path string) error {
 	row := tx.QueryRowContext(ctx, "SELECT ID, Deleted FROM my_config_tree WHERE Path = ? FOR UPDATE", path)

@@ -147,6 +147,29 @@ func LogLastVersion(ctx context.Context, tx *sql.Tx, path, comment string) error
 	return notify(ctx, tx, id)
 }
 
+// LogMovedDescendants records a change-log entry for every live descendant
+// relocated by a subtree move, stamping each with its new path so its history
+// stays visible there. A subtree move only re-stamps the root's path with a
+// version bump; the descendants' paths are rewritten in bulk without a version
+// bump or a log row, so without this their existing log rows would keep their
+// pre-move paths and their history would disappear from the new location. Each
+// gets the same comment as the root move (its own new path is in Path).
+//
+// It deliberately does NOT notify: the root move already emitted one
+// notification, and a bulk move must not flood the feed with a message per
+// descendant. Callers must bump the descendants' Version first so the new
+// (NodeID, Version) rows do not collide with the existing ones. Soft-deleted
+// descendants are skipped — they are tombstones and keep their pre-move path.
+func LogMovedDescendants(ctx context.Context, tx *sql.Tx, newPath, comment string) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO my_config_tree_log (NodeID, Version, ContentType, Value, Author, MTime, Comment, Deleted, Path)
+		SELECT ID, Version, ContentType, Value, ?, MTime, ?, Deleted, Path
+		FROM my_config_tree
+		WHERE Path LIKE ? AND NOT Deleted
+	`, Username(ctx), comment, likeEscape(newPath)+"/%")
+	return err
+}
+
 func notify(ctx context.Context, tx *sql.Tx, versionId int64) error {
 	if notifyDB == nil {
 		return nil
