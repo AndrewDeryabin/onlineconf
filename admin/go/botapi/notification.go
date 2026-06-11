@@ -76,7 +76,7 @@ func selectNotifications(ctx context.Context, lastID, limit int) ([]Notification
 			IF(l.Deleted, 'delete', IFNULL((SELECT 'modify' FROM my_config_tree_log WHERE NodeID = l.NodeID AND Version = l.Version - 1 AND NOT Deleted), 'create')) AS Action,
 			my_config_tree_notification(NodeID) AS Notification
 		FROM my_config_tree_log l
-		WHERE l.ID > ?
+		WHERE l.ID > ? AND NOT l.Silent
 		HAVING Notification <> 'none'
 		ORDER BY l.ID
 		LIMIT ` + strconv.Itoa(limit)

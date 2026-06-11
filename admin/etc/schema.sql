@@ -29,6 +29,7 @@ CREATE TABLE `my_config_tree_log` (
     `MTime` timestamp NOT NULL default CURRENT_TIMESTAMP,
     `Comment` varchar(512) default NULL,
     `Deleted` tinyint(1) NOT NULL default '0',
+    `Silent` tinyint(1) NOT NULL default '0',
     PRIMARY KEY  (`ID`),
     UNIQUE KEY `NodeID` (`NodeID`,`Version`),
     KEY `MTime` (`MTime`),

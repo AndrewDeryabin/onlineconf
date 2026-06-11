@@ -157,15 +157,18 @@ func LogLastVersion(ctx context.Context, tx *sql.Tx, path, comment string) error
 // pre-move paths and their history would disappear from the new location. Each
 // gets the same comment as the root move (its own new path is in Path).
 //
-// It deliberately does NOT notify: the root move already emitted one
-// notification, and a bulk move must not flood the feed with a message per
-// descendant. Callers must bump the descendants' Version first so the new
-// (NodeID, Version) rows do not collide with the existing ones. Soft-deleted
-// descendants are skipped — they are tombstones and keep their pre-move path.
+// Descendant entries deliberately produce no change notifications: the root
+// move already emitted one, and a bulk move must not flood the feed with a
+// message per descendant. For the legacy notifyDB delivery that is achieved
+// by not calling notify here; for the botapi-based delivery (onlineconf-bot)
+// the rows are marked Silent and the notification feed skips them. Callers
+// must bump the descendants' Version first so the new (NodeID, Version) rows
+// do not collide with the existing ones. Soft-deleted descendants are
+// skipped — they are tombstones and keep their pre-move path.
 func LogMovedDescendants(ctx context.Context, tx *sql.Tx, newPath, comment string) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO my_config_tree_log (NodeID, Path, Version, Value, ContentType, Author, MTime, Comment, Deleted)
-		SELECT ID, Path, Version, Value, ContentType, ?, MTime, ?, Deleted
+		INSERT INTO my_config_tree_log (NodeID, Path, Version, Value, ContentType, Author, MTime, Comment, Deleted, Silent)
+		SELECT ID, Path, Version, Value, ContentType, ?, MTime, ?, Deleted, true
 		FROM my_config_tree
 		WHERE Path LIKE ? AND NOT Deleted
 	`, Username(ctx), comment, likeEscape(newPath)+"/%")
