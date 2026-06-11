@@ -24,6 +24,8 @@ var writeError = WriteErrorFunc(map[error]ErrorResponse{
 	ErrNotEmpty:        {HTTPCode: 400, ErrorCode: "NotEmpty"},
 	ErrNotFound:        {HTTPCode: 404, ErrorCode: "NotFound"},
 	ErrParentNotFound:  {HTTPCode: 400, ErrorCode: "ParentNotFound"},
+	ErrDeletedSymlink:  {HTTPCode: 400, ErrorCode: "DeletedSymlink"},
+	ErrDeletedTmpl:     {HTTPCode: 400, ErrorCode: "DeletedTemplate"},
 })
 var writeResponse = WriteResponseOrErrorFunc(writeError)
 
