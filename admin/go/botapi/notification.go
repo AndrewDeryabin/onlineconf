@@ -72,7 +72,7 @@ func selectNotifications(ctx context.Context, lastID, limit int) ([]Notification
 		return nil, ErrLimitTooLarge
 	}
 	query := `
-		SELECT l.ID, l.NodeID, l.Path, l.Version, l.ContentType, l.Value, l.MTime, l.Author, l.Comment,
+		SELECT l.ID, l.NodeID, l.Path, l.Version, l.Value, l.ContentType, l.Author, l.MTime, l.Comment,
 			IF(l.Deleted, 'delete', IFNULL((SELECT 'modify' FROM my_config_tree_log WHERE NodeID = l.NodeID AND Version = l.Version - 1 AND NOT Deleted), 'create')) AS Action,
 			my_config_tree_notification(NodeID) AS Notification
 		FROM my_config_tree_log l
@@ -88,7 +88,7 @@ func selectNotifications(ctx context.Context, lastID, limit int) ([]Notification
 	list := make([]Notification, 0)
 	for rows.Next() {
 		var n Notification
-		err := rows.Scan(&n.ID, &n.NodeID, &n.Path, &n.Version, &n.ContentType, &n.Value, &n.MTime, &n.Author, &n.Comment, &n.Action, &n.Notification)
+		err := rows.Scan(&n.ID, &n.NodeID, &n.Path, &n.Version, &n.Value, &n.ContentType, &n.Author, &n.MTime, &n.Comment, &n.Action, &n.Notification)
 		if err != nil {
 			return nil, err
 		}

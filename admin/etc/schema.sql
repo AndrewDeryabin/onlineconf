@@ -209,8 +209,8 @@ INSERT INTO `my_config_tree` (`ID`, `Name`, `ParentID`, `Notification`) VALUES
     (3, 'module', 2, NULL),
     (4, 'service', 2, NULL);
 
-INSERT INTO `my_config_tree_log` (`NodeID`, `Version`, `Value`, `ContentType`, `Author`, `MTime`, `Comment`, `Deleted`, `Path`)
-SELECT `ID`, `Version`, `Value`, `ContentType`, 'onlineconf', `MTime`, 'Init onlineconf', `Deleted`, `Path` FROM `my_config_tree` ORDER BY `ID`;
+INSERT INTO `my_config_tree_log` (`NodeID`, `Path`, `Version`, `Value`, `ContentType`, `Author`, `MTime`, `Comment`, `Deleted`)
+SELECT `ID`, `Path`, `Version`, `Value`, `ContentType`, 'onlineconf', `MTime`, 'Init onlineconf', `Deleted` FROM `my_config_tree` ORDER BY `ID`;
 
 INSERT INTO `my_config_group` (`Name`) VALUES ('root');
 

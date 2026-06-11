@@ -98,7 +98,7 @@ func SelectLog(ctx context.Context, filter LogFilter, lastID int) ([]LogEntry, e
 
 	query := `
 		SELECT
-			l.ID, l.NodeID, l.Path, l.Version, l.ContentType, l.Value, l.MTime, l.Author, l.Comment, l.Deleted,
+			l.ID, l.NodeID, l.Path, l.Version, l.Value, l.ContentType, l.Author, l.MTime, l.Comment, l.Deleted,
 			my_config_tree_access(t.ID, ?) AS RW,
 			l.ContentType = t.ContentType AND ((l.Value IS NULL AND t.Value IS NULL) OR l.Value = t.Value) AND l.Deleted = t.Deleted AS Same
 		FROM my_config_tree_log l JOIN my_config_tree t ON t.ID = l.NodeID
@@ -116,7 +116,7 @@ func SelectLog(ctx context.Context, filter LogFilter, lastID int) ([]LogEntry, e
 	list := make([]LogEntry, 0)
 	for rows.Next() {
 		var l LogEntry
-		err := rows.Scan(&l.ID, &l.NodeID, &l.Path, &l.Version, &l.ContentType, &l.Value, &l.MTime, &l.Author, &l.Comment, &l.Deleted, &l.RW, &l.Same)
+		err := rows.Scan(&l.ID, &l.NodeID, &l.Path, &l.Version, &l.Value, &l.ContentType, &l.Author, &l.MTime, &l.Comment, &l.Deleted, &l.RW, &l.Same)
 		if err != nil {
 			return nil, err
 		}
@@ -133,8 +133,8 @@ func LogLastVersion(ctx context.Context, tx *sql.Tx, path, comment string) error
 		return ErrCommentRequired
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO my_config_tree_log (NodeID, Version, ContentType, Value, Author, MTime, Comment, Deleted, Path)
-		SELECT ID, Version, ContentType, Value, ?, MTime, ?, Deleted, Path
+		INSERT INTO my_config_tree_log (NodeID, Path, Version, Value, ContentType, Author, MTime, Comment, Deleted)
+		SELECT ID, Path, Version, Value, ContentType, ?, MTime, ?, Deleted
 		FROM my_config_tree
 		WHERE Path = ?
 	`, Username(ctx), comment, path)
@@ -164,8 +164,8 @@ func LogLastVersion(ctx context.Context, tx *sql.Tx, path, comment string) error
 // descendants are skipped — they are tombstones and keep their pre-move path.
 func LogMovedDescendants(ctx context.Context, tx *sql.Tx, newPath, comment string) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO my_config_tree_log (NodeID, Version, ContentType, Value, Author, MTime, Comment, Deleted, Path)
-		SELECT ID, Version, ContentType, Value, ?, MTime, ?, Deleted, Path
+		INSERT INTO my_config_tree_log (NodeID, Path, Version, Value, ContentType, Author, MTime, Comment, Deleted)
+		SELECT ID, Path, Version, Value, ContentType, ?, MTime, ?, Deleted
 		FROM my_config_tree
 		WHERE Path LIKE ? AND NOT Deleted
 	`, Username(ctx), comment, likeEscape(newPath)+"/%")
@@ -193,7 +193,7 @@ func notify(ctx context.Context, tx *sql.Tx, versionId int64) error {
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT l.Version, l.ContentType, l.Value, l.Author, l.Comment, l.Deleted
+		SELECT l.Version, l.Value, l.ContentType, l.Author, l.Comment, l.Deleted
 		FROM (SELECT NodeID, Version FROM my_config_tree_log WHERE ID = ?) s
 		JOIN my_config_tree_log l ON l.NodeID = s.NodeID AND (l.Version BETWEEN s.Version - 1 AND s.Version)
 		ORDER BY l.ID DESC
@@ -206,14 +206,14 @@ func notify(ctx context.Context, tx *sql.Tx, versionId int64) error {
 		return ErrNoSuchVersion
 	}
 	var new logNotifyEntry
-	err = rows.Scan(&new.Version, &new.ContentType, &new.Value, &new.Author, &new.Comment, &new.Deleted)
+	err = rows.Scan(&new.Version, &new.Value, &new.ContentType, &new.Author, &new.Comment, &new.Deleted)
 	if err != nil {
 		return err
 	}
 	message := string(avatars[int(crc32.ChecksumIEEE([]byte(new.Author)))%len(avatars)]) + " " + new.Author + "\n"
 	if rows.Next() {
 		var old logNotifyEntry
-		err := rows.Scan(&old.Version, &old.ContentType, &old.Value, &old.Author, &old.Comment, &old.Deleted)
+		err := rows.Scan(&old.Version, &old.Value, &old.ContentType, &old.Author, &old.Comment, &old.Deleted)
 		if err != nil {
 			return err
 		}
