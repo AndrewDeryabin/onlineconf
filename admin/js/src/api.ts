@@ -46,9 +46,16 @@ const commonUrlencodedOptions = {
 	headers: { ...commonOptions.headers, 'Content-Type': 'application/x-www-form-urlencoded' },
 };
 
+// Percent-encode path segments so that characters like '#' (used in the paths
+// of deleted nodes renamed aside to free their original path) are not
+// interpreted as an URL fragment or query.
+function encodePath(path: string) {
+	return path.split('/').map(encodeURIComponent).join('/');
+}
+
 export async function getParam(path: string, symlink?: 'resolve' | 'follow', depth?: 'children' | 'subtree', options: AxiosRequestConfig = {}) {
 	const params = { symlink, depth };
-	const response = await axios.get<IParam>('/config' + path, { ...options, ...commonOptions, params });
+	const response = await axios.get<IParam>('/config' + encodePath(path), { ...options, ...commonOptions, params });
 	return response.data;
 }
 
@@ -64,14 +71,14 @@ export async function postParam(path: string, modify: ParamModify) {
 	if (symlink) {
 		params.append('symlink', '1');
 	}
-	const response = await axios.post<IParam>('/config' + path, params, commonUrlencodedOptions);
+	const response = await axios.post<IParam>('/config' + encodePath(path), params, commonUrlencodedOptions);
 	return response.data;
 }
 
 export async function deleteParam(path: string, info: { version: number, comment: string }) {
 	const response = await axios.request<void>({
 		...commonUrlencodedOptions,
-		url: '/config' + path,
+		url: '/config' + encodePath(path),
 		method: 'DELETE',
 		data: new URLSearchParams({ version: info.version.toString(), comment: info.comment }),
 	});
@@ -126,7 +133,7 @@ export interface IParamLog {
 
 export async function getParamLog(path: string, lastID?: number, options: AxiosRequestConfig = {}) {
 	const params: LogPagination = { lastid: lastID };
-	const response = await axios.get<IParamLog[]>('/log' + path, { ...options, ...commonOptions, params });
+	const response = await axios.get<IParamLog[]>('/log' + encodePath(path), { ...options, ...commonOptions, params });
 	return response.data;
 }
 
@@ -218,13 +225,13 @@ export interface ParamAccessGroup {
 }
 
 export async function getParamAccess(path: string, options: AxiosRequestConfig = {}) {
-	const response = await axios.get<ParamAccessGroup[]>('/access' + path, { ...options, ...commonOptions });
+	const response = await axios.get<ParamAccessGroup[]>('/access' + encodePath(path), { ...options, ...commonOptions });
 	return response.data;
 }
 
 export async function postParamAccess(path: string, group: string, rw: boolean | null) {
 	const response = await axios.post<ParamAccessGroup>(
-		'/access' + path,
+		'/access' + encodePath(path),
 		new URLSearchParams({ group, rw: String(rw) }),
 		commonUrlencodedOptions,
 	);
@@ -234,7 +241,7 @@ export async function postParamAccess(path: string, group: string, rw: boolean |
 export async function deleteParamAccess(path: string, group: string) {
 	const response = await axios.request<ParamAccessGroup>({
 		...commonUrlencodedOptions,
-		url: '/access' + path,
+		url: '/access' + encodePath(path),
 		method: 'DELETE',
 		data: new URLSearchParams({ group }),
 	});

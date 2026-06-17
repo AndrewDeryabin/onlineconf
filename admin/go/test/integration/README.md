@@ -1,0 +1,46 @@
+# Integration tests
+
+End-to-end tests that drive the `onlineconf-admin` docker-compose stack
+(admin server + MySQL seeded from `admin/etc/*.sql`) over its HTTP API,
+asserting behavior of the move / soft-delete / change-log / notification
+paths. The only host requirements are Go and `docker compose`.
+
+The suite is separated from the unit tests with build tags: these files build
+only with the `integration` tag, while unit tests carry `!integration` — so
+each invocation runs exactly one suite:
+
+```sh
+cd admin/go
+go test ./...                                            # unit tests only
+go test -tags integration -count=1 -v ./test/integration # integration tests only
+```
+
+(`go test -tags integration ./...` also works: with the anti-tag the unit
+tests are excluded from such a run.)
+
+By default `TestMain` recreates the stack with a fresh database
+(`docker compose down -v && up -d --build`), runs the tests, and tears the
+stack down. Environment knobs:
+
+| Variable | Effect |
+|---|---|
+| `ONLINECONF_NO_COMPOSE=1` | Don't manage the stack — assume it is already running and leave it up afterwards. |
+| `ONLINECONF_URL` | Base URL of the admin server (default `http://localhost`). |
+
+Auth uses the `admin`/`admin` demo account from `admin/etc/example-auth.sql`;
+the botapi test provisions its own bot account through the API. Parameter
+paths are suffixed with the test process pid, so re-runs against a persistent
+stack do not collide. Database assertions go through
+`docker compose exec onlineconf-database mysql` since the MySQL port is not
+published on the host.
+
+## Cases
+
+| Test | What it checks |
+|---|---|
+| `TestSmoke` | Stack up; auth + CSRF guard; core read endpoints return 200. |
+| `TestMoveHistoricalPath` | A move records each version's path; pre-move entries stay under the old path, the move entry under the new one. |
+| `TestMoveOntoDeletedPath` | Moving onto a soft-deleted path renames the tombstone aside but `/log/<path>` still shows the former occupant's history alongside the new one. |
+| `TestSubtreeMoveLogging` | A subtree move logs every live descendant at its new path, not just the root. |
+| `TestNotifyOnCommit` | Legacy (notifyDB) notifications fire only on commit — a rejected write emits none; a subtree move notifies once, for the root only. |
+| `TestBotapiSubtreeMoveSilent` | The botapi feed (onlineconf-bot delivery) serves one notification per subtree move: descendant log entries are marked `Silent` and skipped. |

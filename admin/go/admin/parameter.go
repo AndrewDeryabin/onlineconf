@@ -25,6 +25,7 @@ var (
 	ErrVersionNotMatch = errors.New("Version not match")
 	ErrCommentRequired = errors.New("Comment required")
 	ErrInvalidValue    = errors.New("Invalid value")
+	ErrInvalidPath     = errors.New("Invalid path")
 	ErrNotEmpty        = errors.New("Parameter has children")
 	ErrNotFound        = errors.New("Parameter not found")
 	ErrParentNotFound  = errors.New("Parent not found")
@@ -329,7 +330,10 @@ func SelectWithChildrenMulti(ctx context.Context, paths []string) (map[string]*P
 			}
 		}
 		if p.Path != "/" {
-			parentPath, _ := splitPath(p.Path)
+			parentPath, _, err := splitPath(p.Path)
+			if err != nil {
+				return nil, err
+			}
 			if _, ok := result[parentPath]; ok {
 				result[parentPath].Children = append(result[parentPath].Children, p)
 			}
@@ -381,6 +385,7 @@ func SearchParameters(ctx context.Context, term string) ([]Parameter, error) {
 }
 
 func CreateParameter(ctx context.Context, path, contentType, value string, optSummary, optDescription, optNotification NullString, comment string) error {
+	ctx, sink := withNotifications(ctx)
 	var nullValue NullString
 	if contentType != "application/x-null" {
 		nullValue.Valid = true
@@ -402,12 +407,16 @@ func CreateParameter(ctx context.Context, path, contentType, value string, optSu
 		}
 	}
 
+	parentPath, name, err := splitPath(path)
+	if err != nil {
+		return err
+	}
+
 	tx, err := DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 
-	parentPath, name := splitPath(path)
 	parent, err := selectParameterForUpdate(ctx, tx, parentPath)
 	if err != nil {
 		tx.Rollback()
@@ -452,10 +461,11 @@ func CreateParameter(ctx context.Context, path, contentType, value string, optSu
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return commitAndNotify(ctx, tx, sink)
 }
 
 func SetParameter(ctx context.Context, path string, version int, contentType string, value string, comment string) error {
+	ctx, sink := withNotifications(ctx)
 	var nullValue NullString
 	if contentType != "application/x-null" {
 		nullValue.Valid = true
@@ -488,11 +498,15 @@ func SetParameter(ctx context.Context, path string, version int, contentType str
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return commitAndNotify(ctx, tx, sink)
 }
 
 func MoveParameter(ctx context.Context, path string, newPath string, symlink bool, version int, comment string) error {
-	newParentPath, newName := splitPath(newPath)
+	ctx, sink := withNotifications(ctx)
+	newParentPath, newName, err := splitPath(newPath)
+	if err != nil {
+		return err
+	}
 
 	tx, err := DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -518,14 +532,29 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 		return ErrVersionNotMatch
 	}
 
+	if err = freeDeletedPath(ctx, tx, newPath); err != nil {
+		tx.Rollback()
+		return err
+	}
+
 	_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET ParentID = ?, Name = ?, Version = Version + 1, MTime = now() WHERE Path = ?", newParent.ID, newName, path)
 	if err == nil {
 		likePath := likeEscape(p.Path) + "/%"
 		_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET Path = '' WHERE Path LIKE ?", likePath)
 	}
-
 	if err == nil {
-		err = LogLastVersion(ctx, tx, newPath, fmt.Sprintf("Moved from %s. %s", path, comment))
+		// the rewrite above re-stamps descendants' paths via the trigger but
+		// bumps no version; bump the live ones so each can be logged at its new
+		// path (see LogMovedDescendants)
+		_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET Version = Version + 1, MTime = now() WHERE Path LIKE ? AND NOT Deleted", likeEscape(newPath)+"/%")
+	}
+
+	moveComment := fmt.Sprintf("Moved from %s. %s", path, comment)
+	if err == nil {
+		err = LogLastVersion(ctx, tx, newPath, moveComment)
+	}
+	if err == nil {
+		err = LogMovedDescendants(ctx, tx, newPath, moveComment)
 	}
 
 	if err == nil && symlink {
@@ -545,7 +574,38 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return commitAndNotify(ctx, tx, sink)
+}
+
+// freeDeletedPath frees up a Path occupied by a soft-deleted row so it can be
+// reused by another node moved there. Soft-deletion keeps the row with its
+// original Path intact, and Path has a UNIQUE constraint, so without this any
+// move whose destination matches a previously-deleted node would fail with a
+// duplicate-key error. The row's Name is suffixed with its ID (guaranteed
+// unique) and the my_config_tree_move trigger recomputes Path; descendants
+// are then forced to recompute their paths through the same trigger by
+// setting their Path to ”. If the path is occupied by a live node,
+// ErrAlreadyExists is returned.
+func freeDeletedPath(ctx context.Context, tx *sql.Tx, path string) error {
+	row := tx.QueryRowContext(ctx, "SELECT ID, Deleted FROM my_config_tree WHERE Path = ? FOR UPDATE", path)
+	var id int
+	var deleted bool
+	err := row.Scan(&id, &deleted)
+	if err == sql.ErrNoRows {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if !deleted {
+		return ErrAlreadyExists
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET Name = CONCAT(Name, '#', ID) WHERE ID = ?", id)
+	if err != nil {
+		return err
+	}
+	likePath := likeEscape(path) + "/%"
+	_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET Path = '' WHERE Path LIKE ?", likePath)
+	return err
 }
 
 func SetParameterDescription(ctx context.Context, path string, summary, description string) error {
@@ -599,6 +659,7 @@ func SetParameterNotification(ctx context.Context, path string, notification str
 }
 
 func DeleteParameter(ctx context.Context, path string, version int, comment string) error {
+	ctx, sink := withNotifications(ctx)
 	tx, err := DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -641,7 +702,7 @@ func DeleteParameter(ctx context.Context, path string, version int, comment stri
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return commitAndNotify(ctx, tx, sink)
 }
 
 type symlink struct {

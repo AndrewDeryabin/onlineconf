@@ -23,13 +23,16 @@ func Initialize(config AdminConfig) {
 
 var pathRe = regexp.MustCompile(`^(.*)/([^/]+)$`)
 
-func splitPath(path string) (string, string) {
+func splitPath(path string) (string, string, error) {
 	m := pathRe.FindStringSubmatch(path)
+	if m == nil {
+		return "", "", ErrInvalidPath
+	}
 	parentPath, name := m[1], m[2]
 	if parentPath == "" {
 		parentPath = "/"
 	}
-	return parentPath, name
+	return parentPath, name, nil
 }
 
 var likeRe = regexp.MustCompile("([%_])")

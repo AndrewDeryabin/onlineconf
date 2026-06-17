@@ -20,6 +20,7 @@ var writeError = WriteErrorFunc(map[error]ErrorResponse{
 	ErrVersionNotMatch: {HTTPCode: 400, ErrorCode: "VersionNotMatch"},
 	ErrCommentRequired: {HTTPCode: 400, ErrorCode: "CommentRequired"},
 	ErrInvalidValue:    {HTTPCode: 400, ErrorCode: "InvalidValue"},
+	ErrInvalidPath:     {HTTPCode: 400, ErrorCode: "InvalidPath"},
 	ErrNotEmpty:        {HTTPCode: 400, ErrorCode: "NotEmpty"},
 	ErrNotFound:        {HTTPCode: 404, ErrorCode: "NotFound"},
 	ErrParentNotFound:  {HTTPCode: 400, ErrorCode: "ParentNotFound"},
@@ -109,6 +110,9 @@ func serveSetConfig(w http.ResponseWriter, req *http.Request) {
 
 		if newPath := f.Get("path"); newPath != "" {
 			err = MoveParameter(req.Context(), path, newPath, f.Get("symlink") == "1", version, f.Get("comment"))
+			// the parameter now lives at newPath, return its state from there
+			// (the old path either holds a symlink or nothing at all)
+			path = newPath
 		} else {
 			err = SetParameter(req.Context(), path, version, f.Get("mime"), f.Get("data"), f.Get("comment"))
 		}
