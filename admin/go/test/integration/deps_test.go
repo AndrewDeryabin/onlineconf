@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -160,6 +161,81 @@ func TestHealNestedCaseTemplate(t *testing.T) {
 
 	deleteParam(t, cs, "drop case")
 	deleteParam(t, q, "cleanup")
+}
+
+// TestMoveReferencedRequiresSymlink checks that moving a referenced parameter
+// is refused unless a symlink is left behind: without the symlink the old path
+// vanishes and the referrer would dangle (the same breakage deletion refuses);
+// with the symlink the move and the symlink creation are one atomic operation
+// and the referrer keeps resolving.
+func TestMoveReferencedRequiresSymlink(t *testing.T) {
+	target, dst, link := uniqPath("mv-tgt"), uniqPath("mv-dst"), uniqPath("mv-ln")
+	mkParam(t, target, "text/plain", "v", "mk target")
+	mkParam(t, link, "application/x-symlink", target, "mk referrer")
+
+	// move away WITHOUT a symlink -> refused (link would dangle)
+	status, body := adminReq(t, "POST", "/config"+target, url.Values{
+		"version": {strconv.Itoa(paramVersion(t, target))},
+		"path":    {dst},
+		"comment": {"move without symlink"},
+	})
+	if status != http.StatusBadRequest || !strings.Contains(string(body), `"error":"DeletedSymlink"`) {
+		t.Fatalf("move of referenced %s without symlink: status %d body %s, want 400 DeletedSymlink", target, status, body)
+	}
+	if !strings.Contains(string(body), link) {
+		t.Errorf("refusal does not name the referrer %s: %s", link, body)
+	}
+	if s, _ := adminReq(t, "GET", "/config"+dst, nil); s != http.StatusNotFound {
+		t.Errorf("destination %s exists after a refused move (status %d)", dst, s)
+	}
+
+	// move WITH a symlink -> allowed and atomic: the destination exists AND a
+	// symlink pointing at it remains at the old path, in one operation
+	moveParamSymlink(t, target, dst, "move with symlink")
+	if s, _ := adminReq(t, "GET", "/config"+dst, nil); s != http.StatusOK {
+		t.Fatalf("destination %s missing after move-with-symlink (status %d)", dst, s)
+	}
+	var left struct {
+		Mime string `json:"mime"`
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(adminReqOK(t, "GET", "/config"+target, nil), &left); err != nil {
+		t.Fatal(err)
+	}
+	if left.Mime != "application/x-symlink" || left.Data != dst {
+		t.Errorf("leftover at old path = %+v, want a symlink to %s", left, dst)
+	}
+	// the chain link -> target -> dst still resolves: the leftover symlink at the
+	// old path now protects dst directly, and link in turn protects that symlink
+	requireBlockedDelete(t, dst, "DeletedSymlink", target)
+	requireBlockedDelete(t, target, "DeletedSymlink", link)
+
+	deleteParam(t, link, "drop referrer")
+	deleteParam(t, target, "drop leftover symlink")
+	deleteParam(t, dst, "now unreferenced")
+}
+
+// TestMoveReferencedSubtreeRefused checks that the refusal covers the whole
+// moved subtree: a referrer to a descendant blocks a no-symlink move of an
+// ancestor.
+func TestMoveReferencedSubtreeRefused(t *testing.T) {
+	root, dst, link := uniqPath("mvs-root"), uniqPath("mvs-dst"), uniqPath("mvs-ln")
+	mkParam(t, root, "application/x-null", "", "mk root")
+	mkParam(t, root+"/child", "text/plain", "v", "mk child")
+	mkParam(t, link, "application/x-symlink", root+"/child", "referrer to a descendant")
+
+	status, body := adminReq(t, "POST", "/config"+root, url.Values{
+		"version": {strconv.Itoa(paramVersion(t, root))},
+		"path":    {dst},
+		"comment": {"move subtree"},
+	})
+	if status != http.StatusBadRequest || !strings.Contains(string(body), link) {
+		t.Fatalf("move of subtree with a referenced descendant: status %d body %s, want 400 naming %s", status, body, link)
+	}
+
+	deleteParam(t, link, "drop referrer")
+	deleteParam(t, root+"/child", "cleanup")
+	deleteParam(t, root, "cleanup")
 }
 
 // TestHealDanglingTemplate checks that a template referencing a

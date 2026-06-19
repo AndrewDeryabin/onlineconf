@@ -554,6 +554,16 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 		return ErrVersionNotMatch
 	}
 
+	if !symlink {
+		// without a symlink left behind, the old paths cease to exist and any
+		// referrer resolving through the moved subtree would dangle — refuse,
+		// just as deleting the node would be refused
+		if err = checkMovedSubtreeReferrers(ctx, tx, path); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
 	if err = freeDeletedPath(ctx, tx, newPath); err != nil {
 		tx.Rollback()
 		return err

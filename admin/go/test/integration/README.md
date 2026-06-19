@@ -50,6 +50,8 @@ published on the host.
 | `TestCaseReferrerBlocks` | A symlink inside a case branch protects its target. |
 | `TestNestedCaseReferrer` | A symlink buried in a nested case protects its target. |
 | `TestHealNestedCaseTemplate` | A dangling template branch inside a nested case is healed when its path is created. |
+| `TestMoveReferencedRequiresSymlink` | Moving a referenced parameter is refused without a symlink; with one it succeeds atomically and the referrer keeps resolving. |
+| `TestMoveReferencedSubtreeRefused` | A referrer to a descendant blocks a no-symlink move of an ancestor subtree. |
 | `TestDeepChainTrackedAtDefaultDepth` | Dependencies are tracked through a 6-hop directory-symlink chain (deeper than the old default of 5). |
 | `TestDepthTunableViaParameter` | `/onlineconf/deleted-key-symlinks-check-depth` controls the depth live: raising it rebuilds the edge table, lowering it does not. |
 | `TestSelfReferencingSymlinks` | Symlinks to their own parent and to the root protect the target without deadlocking their own deletion. |

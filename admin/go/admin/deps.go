@@ -430,7 +430,48 @@ func checkParameterReferrers(ctx context.Context, tx *sql.Tx, p *Parameter) erro
 		return err
 	}
 	defer rows.Close()
+	return referrerError(rows)
+}
 
+// checkMovedSubtreeReferrers refuses a move that would break a live referrer.
+// Moving a referenced node — or any node in its subtree — to a new path
+// without leaving a symlink behind makes every referrer that resolved through
+// an old path dangle, exactly as deleting it would. Moving WITH a symlink is
+// exempt (the left-behind symlink keeps the old paths resolving), so callers
+// invoke this only for the no-symlink case.
+func checkMovedSubtreeReferrers(ctx context.Context, tx *sql.Tx, path string) error {
+	disabled, err := isDeletedParamSymlinksCheckDisabled(ctx)
+	if err != nil {
+		return err
+	}
+	if disabled {
+		return nil
+	}
+
+	// Any live referrer with an edge to a node in the moved subtree breaks,
+	// regardless of where the referrer itself lives: its absolute target path
+	// no longer resolves after the move. (A referrer inside the subtree that
+	// points outside keeps resolving and has no edge into the subtree, so it is
+	// correctly not matched.)
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT r.Path, r.ContentType
+		  FROM my_config_tree_dep d
+		  JOIN my_config_tree m ON m.ID = d.TargetID
+		  JOIN my_config_tree r ON r.ID = d.ReferrerID
+		 WHERE (m.Path = ? OR m.Path LIKE ?)
+		   AND NOT r.Deleted
+		 ORDER BY r.Path
+	`, path, likeEscape(path)+"/%")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	return referrerError(rows)
+}
+
+// referrerError drains a (Path, ContentType) result set of referrers and turns
+// it into the appropriate "still referenced" error, or nil if empty.
+func referrerError(rows *sql.Rows) error {
 	var symlinked, expanded []string
 	for rows.Next() {
 		var path, contentType string
