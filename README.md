@@ -187,7 +187,7 @@ Two operations on a parameter that other symlinks/templates still depend on are 
 * **Deletion** — deleting the parameter would leave those symlinks/templates dangling.
 * **Move without leaving a symlink** — moving the parameter (or a subtree containing a referenced parameter) to another path makes the old paths stop resolving, breaking the referrers the same way a deletion would. Moving *with* a symlink left behind at the old path is allowed: the symlink keeps the old paths resolving, and the move and the symlink creation are performed atomically.
 
-Symlinks pointing at one of their own parents (including the root) are handled correctly and never block their own deletion. Dependency chains are followed up to a configurable depth (`maxSymlinkDepth`, default 10); a parameter referenced only through a chain longer than that depth is not protected. The depth is set by `/onlineconf/deleted-key-symlinks-check-depth` (a plain-text integer); raising it rebuilds the dependency information in the background and takes effect without restarting the server.
+Symlinks pointing at one of their own parents (including the root) are handled correctly and never block their own deletion. Dependency chains are followed up to a configurable depth (default 10); a parameter referenced only through a chain longer than that depth is not protected. The depth is set by `/onlineconf/deleted-key-symlinks-check-depth` (a plain-text integer); raising it rebuilds the dependency information in the background and takes effect without restarting the server.
 
 To disable these checks entirely, set `/onlineconf/disable-deleted-key-symlinks-check` to any non-empty text value other than `0`.
 
