@@ -523,6 +523,8 @@ func rebuildDepsBounded(depth int) error {
 	case errors.Is(err, context.DeadlineExceeded):
 		log.Error().Int("depth", depth).Dur("timeout", depsRebuildTimeout).Msgf(
 			"parameter dependency rebuild timed out; lower %s", depthParamPath)
+	case errors.Is(err, errDepsRebuildLocked):
+		log.Info().Int("depth", depth).Msg("another instance is rebuilding parameter dependencies; skipping")
 	case err != nil:
 		log.Error().Err(err).Msg("failed to rebuild parameter dependencies")
 	case count >= 0:
@@ -611,8 +613,12 @@ func depsNeedRebuild(hasStored bool, storedDepth, configDepth int) bool {
 	return !hasStored || configDepth > storedDepth
 }
 
-func selectDepDepth(ctx context.Context, tx *sql.Tx) (int, bool, error) {
-	row := tx.QueryRowContext(ctx, "SELECT Depth FROM my_config_tree_dep_meta LIMIT 1")
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+}
+
+func selectDepDepth(ctx context.Context, db queryRower) (int, bool, error) {
+	row := db.QueryRowContext(ctx, "SELECT Depth FROM my_config_tree_dep_meta LIMIT 1")
 	var depth int
 	err := row.Scan(&depth)
 	if err == sql.ErrNoRows {
@@ -623,22 +629,78 @@ func selectDepDepth(ctx context.Context, tx *sql.Tx) (int, bool, error) {
 	return depth, true, nil
 }
 
+// errDepsRebuildLocked reports that another admin instance holds the rebuild
+// lock (e.g. during a rolling deploy). Callers treat it as "try again later":
+// the startup loop retries and finds the winner's rebuild already recorded.
+var errDepsRebuildLocked = errors.New("parameter dependency rebuild is locked by another instance")
+
+// depsRebuildLockWait bounds how long an instance waits for the advisory lock
+// before giving up with errDepsRebuildLocked.
+const depsRebuildLockWait = 10 * time.Second
+
+// acquireDepsRebuildLock serializes full rebuilds across admin instances with
+// a MySQL advisory lock held on a dedicated connection (GET_LOCK is
+// connection-scoped, and the server releases it if the connection dies, so a
+// crashed rebuild cannot leave the lock stuck). The lock name is scoped to the
+// current database — advisory locks are server-wide and installations may
+// share a MySQL server. The returned release func must be called once the
+// rebuild transaction is finished.
+func acquireDepsRebuildLock(ctx context.Context) (release func(), err error) {
+	conn, err := DB.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var got sql.NullInt64
+	row := conn.QueryRowContext(ctx, "SELECT GET_LOCK(CONCAT(DATABASE(), '/deps-rebuild'), ?)",
+		int(depsRebuildLockWait/time.Second))
+	if err := row.Scan(&got); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if !got.Valid || got.Int64 != 1 {
+		conn.Close()
+		return nil, errDepsRebuildLocked
+	}
+	return func() {
+		// ignore errors: closing the connection releases the lock anyway
+		conn.ExecContext(ctx, "DO RELEASE_LOCK(CONCAT(DATABASE(), '/deps-rebuild'))")
+		conn.Close()
+	}, nil
+}
+
 // rebuildDepsIfNeeded recomputes every referrer's edges at the given depth when
 // depsNeedRebuild says so, and records that depth. Returns the number of
-// referrers rebuilt, or -1 when the table was already up to date.
+// referrers rebuilt, or -1 when the table was already up to date. Rebuilds are
+// serialized across instances by an advisory lock; the depth is re-checked
+// under the lock, so an instance that waited while another one rebuilt
+// no-ops instead of repeating the work.
 func rebuildDepsIfNeeded(ctx context.Context, depth int) (int, error) {
+	storedDepth, hasStored, err := selectDepDepth(ctx, DB)
+	if err != nil {
+		return -1, err
+	}
+	if !depsNeedRebuild(hasStored, storedDepth, depth) {
+		return -1, nil
+	}
+
+	release, err := acquireDepsRebuildLock(ctx)
+	if err != nil {
+		return -1, err
+	}
+	defer release()
+
 	tx, err := DB.BeginTx(ctx, nil)
 	if err != nil {
 		return -1, err
 	}
 	defer tx.Rollback()
 
-	storedDepth, hasStored, err := selectDepDepth(ctx, tx)
+	storedDepth, hasStored, err = selectDepDepth(ctx, tx)
 	if err != nil {
 		return -1, err
 	}
 	if !depsNeedRebuild(hasStored, storedDepth, depth) {
-		return -1, nil
+		return -1, nil // another instance rebuilt while we waited for the lock
 	}
 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM my_config_tree_dep"); err != nil {
