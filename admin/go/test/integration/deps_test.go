@@ -360,6 +360,105 @@ func TestDepthTunableViaParameter(t *testing.T) {
 	}
 }
 
+// TestHealAfterDisabledDeleteRecreate checks the full flag-era repair path: a
+// target subtree destroyed with the check disabled and later recreated must be
+// protected again — including for a referrer that resolves through an
+// intermediate symlink and never textually mentions the recreated paths (the
+// dangling-point tracking plus the one-level dependent recompute in heal).
+func TestHealAfterDisabledDeleteRecreate(t *testing.T) {
+	const flag = "/onlineconf/disable-deleted-key-symlinks-check"
+	t.Cleanup(func() {
+		if status, _ := adminReq(t, "GET", "/config"+flag, nil); status == http.StatusOK {
+			deleteParam(t, flag, "restore the check")
+		}
+	})
+
+	g, link, b := uniqPath("heal-gone"), uniqPath("heal-link"), uniqPath("heal-b")
+	mkParam(t, g, "application/x-null", "", "mk g")
+	mkParam(t, g+"/sub", "application/x-null", "", "mk sub")
+	mkParam(t, g+"/sub/c", "text/plain", "v", "mk c")
+	mkParam(t, link, "application/x-symlink", g+"/sub", "mk link")
+	mkParam(t, b, "application/x-symlink", link+"/c", "mk b (resolves through link)")
+
+	// destroy the target subtree with the check disabled
+	mkParam(t, flag, "text/plain", "1", "disable the check")
+	deleteParam(t, g+"/sub/c", "flag-era delete")
+	deleteParam(t, g+"/sub", "flag-era delete")
+	deleteParam(t, g, "flag-era delete")
+	deleteParam(t, flag, "re-enable the check")
+
+	// recreate the subtree top-down: healing must re-attach link (textual
+	// mention) and b (dangling point + dependent of link)
+	mkParam(t, g, "application/x-null", "", "recreate g")
+	mkParam(t, g+"/sub", "application/x-null", "", "recreate sub")
+	mkParam(t, g+"/sub/c", "text/plain", "v2", "recreate c")
+
+	// the deep referrer b protects the recreated leaf even though nothing
+	// textually mentions it
+	requireBlockedDelete(t, g+"/sub/c", "DeletedSymlink", b)
+
+	deleteParam(t, b, "drop deep referrer")
+	deleteParam(t, link, "drop link")
+	deleteParam(t, g+"/sub/c", "now deletable")
+	deleteParam(t, g+"/sub", "cleanup")
+	deleteParam(t, g, "cleanup")
+}
+
+// TestFailClosedBeforeBackfill checks the first-boot window: while the
+// dependency table has never been built (no recorded depth), deletions are
+// refused with a retriable error instead of passing unchecked.
+func TestFailClosedBeforeBackfill(t *testing.T) {
+	p := uniqPath("notready")
+	mkParam(t, p, "text/plain", "v", "mk")
+
+	saved := dbQuery(t, "SELECT Depth FROM my_config_tree_dep_meta")
+	dbQuery(t, "DELETE FROM my_config_tree_dep_meta")
+	status, body := tryDelete(t, p)
+	if len(saved) == 1 && len(saved[0]) == 1 { // restore before asserting
+		dbQuery(t, "INSERT INTO my_config_tree_dep_meta (Depth) VALUES ("+saved[0][0]+")")
+	}
+
+	if status != http.StatusServiceUnavailable || !strings.Contains(body, `"error":"DepsNotReady"`) {
+		t.Fatalf("DELETE %s before backfill: status %d body %s, want 503 DepsNotReady", p, status, body)
+	}
+	deleteParam(t, p, "cleanup (dependency data restored)")
+}
+
+// TestDepthTruncationLogged checks that a dependency walk abandoned at the
+// depth cap is logged: protection narrowing must be visible, not silent.
+func TestDepthTruncationLogged(t *testing.T) {
+	base := uniqPath("trunc")
+	mkParam(t, base, "application/x-null", "", "mk base")
+	mkParam(t, base+"/target", "application/x-null", "", "mk target")
+	mkParam(t, base+"/target/leaf", "text/plain", "v", "mk leaf")
+	prev := base + "/target"
+	const hops = 11 // one more than the default depth of 10
+	for i := 1; i <= hops; i++ {
+		s := fmt.Sprintf("%s/s%d", base, i)
+		mkParam(t, s, "application/x-symlink", prev, "mk hop")
+		prev = s
+	}
+	ref := base + "/ref"
+	mkParam(t, ref, "application/x-symlink", fmt.Sprintf("%s/s%d/leaf", base, hops),
+		"referrer through too many hops")
+
+	logs, err := compose("logs", "onlineconf-admin")
+	if err != nil {
+		t.Fatalf("reading admin logs: %v\n%s", err, logs)
+	}
+	if !strings.Contains(logs, "dependency resolution truncated") {
+		t.Error("truncation warning not found in the admin server logs")
+	}
+
+	deleteParam(t, ref, "drop referrer")
+	for i := hops; i >= 1; i-- {
+		deleteParam(t, fmt.Sprintf("%s/s%d", base, i), "drop hop")
+	}
+	deleteParam(t, base+"/target/leaf", "cleanup")
+	deleteParam(t, base+"/target", "cleanup")
+	deleteParam(t, base, "cleanup")
+}
+
 // TestDisableFlagSkipsCheck checks the /onlineconf/disable-deleted-key-symlinks-check
 // escape hatch: with the flag set, referenced parameters are deletable. Keep
 // this test last in the file — it temporarily disables the protection.

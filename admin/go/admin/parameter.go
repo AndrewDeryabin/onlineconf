@@ -28,6 +28,7 @@ var (
 	ErrParentNotFound  = errors.New("Parent not found")
 	ErrDeletedSymlink  = errors.New("Parameter being deleted is symlinked")
 	ErrDeletedTmpl     = errors.New("Parameter being deleted is referred from template(s)")
+	ErrDepsNotReady    = errors.New("Parameter dependency data is initializing, retry later")
 )
 
 const selectFields string = `
@@ -747,6 +748,9 @@ func DeleteParameter(ctx context.Context, path string, version int, comment stri
 		// a deleted parameter refers to nothing; its own incoming edges are
 		// guaranteed empty by checkParameterReferrers above
 		_, err = tx.ExecContext(ctx, "DELETE FROM my_config_tree_dep WHERE ReferrerID = ?", p.ID)
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, "DELETE FROM my_config_tree_dep_dangling WHERE ReferrerID = ?", p.ID)
 	}
 	if err == nil {
 		err = ClearAccess(ctx, tx, p.ID)

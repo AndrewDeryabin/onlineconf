@@ -144,23 +144,36 @@ func selectDepNode(ctx context.Context, tx *sql.Tx, path string) (*depNode, erro
 // depWalker simulates resolution of target paths against the current tree the
 // way the resolver does (graph.get): segment by segment, following symlinks —
 // and, lacking a server context, every symlink branch of a case — before
-// descending. It collects the IDs of the nodes the resolution depends on.
-// Cycles are cut by the visited set, chains by maxSymlinkDepth, and dangling
-// paths simply end the walk: a reference that does not resolve depends on
-// nothing (it is healed if its target appears later, see
-// healReferrersMentioning).
+// descending. It collects the IDs of the nodes the resolution depends on, and
+// the paths at which resolution stopped because the node does not exist
+// (dangling points, persisted so the referrer is recomputed the moment such a
+// path is created — see healReferrersMentioning). Cycles are cut by the
+// visited map; chains deeper than maxSymlinkDepth are truncated and flagged
+// so the caller can log the narrowed protection.
 type depWalker struct {
-	ctx     context.Context
-	tx      *sql.Tx
-	deps    map[int]bool
-	visited map[string]bool
+	ctx       context.Context
+	tx        *sql.Tx
+	deps      map[int]bool
+	dangling  map[string]bool
+	visited   map[string]int // path → shallowest depth it was walked at
+	truncated bool
 }
 
 func (w *depWalker) walk(path string, depth int) error {
-	if int64(depth) > maxSymlinkDepth.Load() || len(path) > maxPathLen || w.visited[path] {
+	if int64(depth) > maxSymlinkDepth.Load() {
+		w.truncated = true
 		return nil
 	}
-	w.visited[path] = true
+	if len(path) > maxPathLen {
+		return nil
+	}
+	// re-walk a visited path only when arriving with a smaller depth: the
+	// first visit may have been near the cap and explored less than the
+	// remaining budget now allows
+	if prev, ok := w.visited[path]; ok && prev <= depth {
+		return nil
+	}
+	w.visited[path] = depth
 	if path == "/" {
 		root, err := selectDepNode(w.ctx, w.tx, "/")
 		if err != nil || root == nil {
@@ -183,7 +196,10 @@ func (w *depWalker) walk(path string, depth int) error {
 		if err != nil {
 			return err
 		}
-		if node == nil { // dangling
+		if node == nil {
+			// dangling: remember where the resolution stopped, so creating
+			// this exact path later triggers a recompute of the referrer
+			w.dangling[current] = true
 			return nil
 		}
 		if i == len(segments)-1 {
@@ -213,35 +229,59 @@ func (w *depWalker) walk(path string, depth int) error {
 	return nil
 }
 
-// updateNodeDeps recomputes and stores the dependency edges of a node.
-// Self-edges are skipped: a referrer resolving through or onto itself must
-// not block its own deletion.
+// updateNodeDeps recomputes and stores the dependency edges and dangling
+// points of a node. Self-edges are skipped: a referrer resolving through or
+// onto itself must not block its own deletion.
 func updateNodeDeps(ctx context.Context, tx *sql.Tx, id int, contentType string, value NullString) error {
-	w := depWalker{ctx: ctx, tx: tx, deps: map[int]bool{}, visited: map[string]bool{}}
+	w := depWalker{ctx: ctx, tx: tx, deps: map[int]bool{}, dangling: map[string]bool{}, visited: map[string]int{}}
 	for _, target := range referrerTargets(contentType, value) {
 		if err := w.walk(target, 0); err != nil {
 			return err
 		}
 	}
+	if w.truncated {
+		// protection silently narrows beyond the cap; make it visible
+		log.Warn().Int("referrer", id).Int64("depth", maxSymlinkDepth.Load()).Msgf(
+			"dependency resolution truncated at the depth limit, deeper references are not tracked; consider raising %s", depthParamPath)
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM my_config_tree_dep WHERE ReferrerID = ?", id); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM my_config_tree_dep_dangling WHERE ReferrerID = ?", id); err != nil {
+		return err
+	}
 	delete(w.deps, id)
-	if len(w.deps) == 0 {
-		return nil
-	}
-	query := strings.Builder{}
-	query.WriteString("INSERT INTO my_config_tree_dep (ReferrerID, TargetID) VALUES ")
-	bind := make([]interface{}, 0, 2*len(w.deps))
-	for target := range w.deps {
-		if len(bind) > 0 {
-			query.WriteString(", ")
+	if len(w.deps) != 0 {
+		query := strings.Builder{}
+		query.WriteString("INSERT INTO my_config_tree_dep (ReferrerID, TargetID) VALUES ")
+		bind := make([]interface{}, 0, 2*len(w.deps))
+		for target := range w.deps {
+			if len(bind) > 0 {
+				query.WriteString(", ")
+			}
+			query.WriteString("(?, ?)")
+			bind = append(bind, id, target)
 		}
-		query.WriteString("(?, ?)")
-		bind = append(bind, id, target)
+		if _, err := tx.ExecContext(ctx, query.String(), bind...); err != nil {
+			return err
+		}
 	}
-	_, err := tx.ExecContext(ctx, query.String(), bind...)
-	return err
+	if len(w.dangling) != 0 {
+		query := strings.Builder{}
+		query.WriteString("INSERT INTO my_config_tree_dep_dangling (ReferrerID, Path) VALUES ")
+		bind := make([]interface{}, 0, 2*len(w.dangling))
+		for path := range w.dangling {
+			if len(bind) > 0 {
+				query.WriteString(", ")
+			}
+			query.WriteString("(?, ?)")
+			bind = append(bind, id, path)
+		}
+		if _, err := tx.ExecContext(ctx, query.String(), bind...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // updateParameterDepsByPath recomputes the edges of the node currently at the
@@ -347,13 +387,20 @@ func selectDependentIDs(ctx context.Context, tx *sql.Tx, targetIDs []int) ([]int
 	return ids, rows.Err()
 }
 
-// healReferrersMentioning recomputes the edges of referrers that textually
-// mention the given path or its subtree. It must be called when a path starts
-// to exist (create, resurrect, move-in): a referrer written while its target
-// was missing carries no edge to it (templates may legally reference
-// not-yet-existing paths, and symlinks can dangle after moves or
-// check-disabled periods), so without healing the new node would be deletable
-// while referenced.
+// healReferrersMentioning recomputes the edges of referrers affected by a path
+// starting to exist (create, resurrect, move-in). Three complementary triggers:
+//
+//  1. referrers that textually mention the path or its subtree — covers
+//     delete-with-check-disabled + recreate, and templates written before
+//     their target existed;
+//  2. referrers whose recorded dangling point is the path (or lies inside a
+//     moved-in subtree) — covers referrers whose resolution stopped there
+//     through any number of symlink hops, which no textual scan can see;
+//  3. one level of dependents of the recomputed referrers — a healed symlink
+//     may extend the resolution of referrers that hop through it, and every
+//     hop is a direct edge, so one level is exhaustive.
+//
+// Without healing, the new node would be deletable while referenced.
 func healReferrersMentioning(ctx context.Context, tx *sql.Tx, path string) error {
 	exact := path
 	prefix := likeEscape(path) + "/%"
@@ -382,25 +429,49 @@ func healReferrersMentioning(ctx context.Context, tx *sql.Tx, path string) error
 		 WHERE ContentType = 'application/x-case'
 		   AND NOT Deleted
 		   AND Value LIKE ?
-	`, exact, prefix, tmplExact, tmplPrefix, contains)
+		UNION
+		SELECT ReferrerID
+		  FROM my_config_tree_dep_dangling
+		 WHERE Path = ? OR Path LIKE ?
+	`, exact, prefix, tmplExact, tmplPrefix, contains, exact, prefix)
 	if err != nil {
 		return err
 	}
-	var ids []int
+	healed := make(map[int]bool)
 	for rows.Next() {
 		var id int
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
 			return err
 		}
-		ids = append(ids, id)
+		healed[id] = true
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return err
 	}
-	rows.Close() // before reusing the connection in recomputeDeps
-	return recomputeDeps(ctx, tx, ids)
+	rows.Close() // before reusing the connection below
+	if len(healed) == 0 {
+		return nil
+	}
+	ids := make([]int, 0, len(healed))
+	for id := range healed {
+		ids = append(ids, id)
+	}
+	if err := recomputeDeps(ctx, tx, ids); err != nil {
+		return err
+	}
+	dependents, err := selectDependentIDs(ctx, tx, ids)
+	if err != nil {
+		return err
+	}
+	pending := dependents[:0]
+	for _, id := range dependents {
+		if !healed[id] {
+			pending = append(pending, id)
+		}
+	}
+	return recomputeDeps(ctx, tx, pending)
 }
 
 // checkParameterReferrers refuses the deletion of a parameter some live
@@ -417,6 +488,9 @@ func checkParameterReferrers(ctx context.Context, tx *sql.Tx, p *Parameter) erro
 	}
 	if disabled {
 		return nil
+	}
+	if err := checkDepsReady(ctx, tx); err != nil {
+		return err
 	}
 
 	rows, err := tx.QueryContext(ctx, `
@@ -447,6 +521,9 @@ func checkMovedSubtreeReferrers(ctx context.Context, tx *sql.Tx, path string) er
 	if disabled {
 		return nil
 	}
+	if err := checkDepsReady(ctx, tx); err != nil {
+		return err
+	}
 
 	// Any live referrer with an edge to a node in the moved subtree breaks,
 	// regardless of where the referrer itself lives: its absolute target path
@@ -467,6 +544,22 @@ func checkMovedSubtreeReferrers(ctx context.Context, tx *sql.Tx, path string) er
 	}
 	defer rows.Close()
 	return referrerError(rows)
+}
+
+// checkDepsReady fails closed while the dependency table has never been built
+// (the window between the first start after the migration and the initial
+// backfill commit): an empty table would silently allow every deletion. The
+// recorded depth row is written only by a completed rebuild, so its absence
+// means "not built yet". The disable flag still bypasses everything.
+func checkDepsReady(ctx context.Context, tx *sql.Tx) error {
+	_, hasStored, err := selectDepDepth(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !hasStored {
+		return ErrDepsNotReady
+	}
+	return nil
 }
 
 // referrerError drains a (Path, ContentType) result set of referrers and turns
@@ -704,6 +797,9 @@ func rebuildDepsIfNeeded(ctx context.Context, depth int) (int, error) {
 	}
 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM my_config_tree_dep"); err != nil {
+		return -1, err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM my_config_tree_dep_dangling"); err != nil {
 		return -1, err
 	}
 
