@@ -61,3 +61,12 @@ published on the host.
 | `TestHealDanglingTemplate` | A template referencing a not-yet-existing path protects it as soon as it is created. |
 | `TestBackfillProtectsExampleData` | The startup backfill populates dependency edges for a pre-existing database. |
 | `TestDisableFlagSkipsCheck` | The `disable-deleted-key-symlinks-check` flag still bypasses the check. |
+| `TestTemplateFlagCRUD` | The template flag is stored and reported, preserved by writes that do not mention it, cleared by `template=0`, logged per version and refused on ineligible types. |
+| `TestTemplateFlagGated` | A fresh stack has the feature on (absent parameter = enabled); `/onlineconf/template-flag = 0` refuses `template`-carrying writes and flips `/ui-config`, which also advertises the resolver's template variables. |
+| `TestTypedTemplateDelivery` | A flagged `application/json` parameter reaches `/client/config` typed and substituted; one with a non-server variable is delivered as `application/x-template` for updater-side substitution. |
+| `TestFlaggedReferrerBlocksDelete` | Flagged parameters protect their `${/path}` targets like legacy templates: node-level, from a case branch, and through a symlink hop. |
+| `TestFlaggedReferrerHealed` | A flagged parameter written before its target exists protects the target the moment it is created. |
+| `TestRebuildSeedsFlagged` | A full dependency rebuild (depth raise) re-discovers flagged referrers. |
+| `TestConvertTemplateTypes` | `onlineconf-admin -convert-template-types` rewrites legacy templates (node values and nested case branches) with Silent log rows, unchanged dependency edges and idempotent re-runs. |
+| `TestLogRestorePreservesFlag` | Restoring a historical version restores its flag; a legacy `application/x-template` version still restores. |
+| `TestResurrectClearsFlag` | Re-creating a soft-deleted path does not inherit the zombie's template flag. |
