@@ -93,10 +93,30 @@ The daemon is written in Go, has no dependencies and easily deployed on any syst
 * Text - a text, can be multiline;
 * JSON - JSON-encoded field;
 * YAML - a field stored, edited and viewed as YAML. Applications will receive it transcoded to JSON to simplify usage;
-* Template - a text template where other parameters, a hostname/ip of a target server or variables from `variables` section of *onlineconf-updater* configuration file can be substituted;
 * Symlink - a symbolic link to another parameter similar to symlinks of Unix systems;
 * Case - a conditional value, works as the switch operator;
 * Various types of lists: a simple comma-separated list, *ip:port* pairs separated by a comma and *ip:ports* pairs separated by a semicolon (where ports are separated by a comma).
+
+### Templates
+
+Any type except Null, Symlink and Case can additionally be marked with the
+**Template** flag. The value of such a parameter may contain `${...}`
+placeholders which are substituted on delivery: values of other parameters
+(`${/path/of/parameter}`), the hostname/ip of the target server
+(`${hostname}`, `${short_hostname}`, `${ip}`) or variables from the
+`variables` section of the *onlineconf-updater* configuration file. The
+parameter keeps its declared type — a templated JSON is delivered to
+applications as JSON once every placeholder is expanded (values with
+updater-side variables are delivered as untyped text and finished on the
+host). The flag is written by the admin UI/API when
+`/onlineconf/template-flag` allows it: the switch is an opt-out — a missing
+parameter means the feature is on, which is the default for fresh
+installations. Existing installations must create it with the value `0`
+**before** upgrading (an old server serves flagged values as literal text)
+and set it to `1` once every instance runs a new version; stored parameters
+of the legacy *Template* type are then rewritten to the flag form by the
+one-shot `onlineconf-admin -convert-template-types` command. The legacy
+type keeps working (and stays rendered in the change history) until then.
 
 ## Authentication
 
