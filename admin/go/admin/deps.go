@@ -58,30 +58,37 @@ var templateVarRe = regexp.MustCompile(`\$\{(/[^}]*)\}`)
 type caseEntry struct {
 	ContentType string     `json:"mime"`
 	Value       NullString `json:"value"`
+	Templated   bool       `json:"template"`
 }
 
 // referrerTargets extracts the tree paths a parameter value refers to: the
-// target of a symlink, the ${/path} variables of a template, and the same
-// from every (possibly nested) case branch.
-func referrerTargets(contentType string, value NullString) []string {
+// target of a symlink, the ${/path} variables of a template — the legacy
+// content type and the flagged form alike — and the same from every
+// (possibly nested) case branch. The two template encodings are equivalent
+// here by design: converting one to the other never changes the edge set.
+func referrerTargets(contentType string, templated bool, value NullString) []string {
 	if !value.Valid {
 		return nil
 	}
-	switch contentType {
-	case "application/x-symlink":
+	// the redirecting types take precedence over the flag, mirroring the
+	// resolver: it dispatches on symlink/case first and evaluates templates
+	// only once resolution settles (the flag is invalid on these types
+	// anyway, but stored data is taken as it is)
+	switch {
+	case contentType == "application/x-symlink":
 		return []string{value.String}
-	case "application/x-template":
-		return templatePathVars(value.String)
-	case "application/x-case":
+	case contentType == "application/x-case":
 		var cases []caseEntry
 		if err := json.Unmarshal([]byte(value.String), &cases); err != nil {
 			return nil
 		}
 		var targets []string
 		for _, c := range cases {
-			targets = append(targets, referrerTargets(c.ContentType, c.Value)...)
+			targets = append(targets, referrerTargets(c.ContentType, c.Templated, c.Value)...)
 		}
 		return targets
+	case templated || contentType == "application/x-template":
+		return templatePathVars(value.String)
 	}
 	return nil
 }
@@ -126,6 +133,7 @@ func caseSymlinkTargets(value NullString) []string {
 type depNode struct {
 	ID          int
 	ContentType string
+	Templated   bool
 	Value       NullString
 }
 
@@ -232,9 +240,9 @@ func (w *depWalker) walk(path string, depth int) error {
 // updateNodeDeps recomputes and stores the dependency edges and dangling
 // points of a node. Self-edges are skipped: a referrer resolving through or
 // onto itself must not block its own deletion.
-func updateNodeDeps(ctx context.Context, tx *sql.Tx, id int, contentType string, value NullString) error {
+func updateNodeDeps(ctx context.Context, tx *sql.Tx, id int, contentType string, templated bool, value NullString) error {
 	w := depWalker{ctx: ctx, tx: tx, deps: map[int]bool{}, dangling: map[string]bool{}, visited: map[string]int{}}
-	for _, target := range referrerTargets(contentType, value) {
+	for _, target := range referrerTargets(contentType, templated, value) {
 		if err := w.walk(target, 0); err != nil {
 			return err
 		}
@@ -287,13 +295,13 @@ func updateNodeDeps(ctx context.Context, tx *sql.Tx, id int, contentType string,
 // updateParameterDepsByPath recomputes the edges of the node currently at the
 // given path (used where the caller has no node ID at hand, e.g. right after
 // an INSERT).
-func updateParameterDepsByPath(ctx context.Context, tx *sql.Tx, path, contentType string, value NullString) error {
+func updateParameterDepsByPath(ctx context.Context, tx *sql.Tx, path, contentType string, templated bool, value NullString) error {
 	row := tx.QueryRowContext(ctx, "SELECT ID FROM my_config_tree WHERE Path = ?", path)
 	var id int
 	if err := row.Scan(&id); err != nil {
 		return err
 	}
-	return updateNodeDeps(ctx, tx, id, contentType, value)
+	return updateNodeDeps(ctx, tx, id, contentType, templated, value)
 }
 
 // depsRedirectChanged reports whether a value change of a node can alter how
@@ -341,15 +349,15 @@ func recomputeMovedDependents(ctx context.Context, tx *sql.Tx, newPath string) e
 // that are gone or deleted by now).
 func recomputeDeps(ctx context.Context, tx *sql.Tx, referrerIDs []int) error {
 	for _, id := range referrerIDs {
-		row := tx.QueryRowContext(ctx, "SELECT ID, ContentType, Value FROM my_config_tree WHERE ID = ? AND NOT Deleted", id)
+		row := tx.QueryRowContext(ctx, "SELECT ID, ContentType, Templated, Value FROM my_config_tree WHERE ID = ? AND NOT Deleted", id)
 		var n depNode
-		err := row.Scan(&n.ID, &n.ContentType, &n.Value)
+		err := row.Scan(&n.ID, &n.ContentType, &n.Templated, &n.Value)
 		if err == sql.ErrNoRows {
 			continue
 		} else if err != nil {
 			return err
 		}
-		if err := updateNodeDeps(ctx, tx, n.ID, n.ContentType, n.Value); err != nil {
+		if err := updateNodeDeps(ctx, tx, n.ID, n.ContentType, n.Templated, n.Value); err != nil {
 			return err
 		}
 	}
@@ -426,6 +434,12 @@ func healReferrersMentioning(ctx context.Context, tx *sql.Tx, path string) error
 		UNION
 		SELECT ID
 		  FROM my_config_tree
+		 WHERE Templated
+		   AND NOT Deleted
+		   AND (Value LIKE ? OR Value LIKE ?)
+		UNION
+		SELECT ID
+		  FROM my_config_tree
 		 WHERE ContentType = 'application/x-case'
 		   AND NOT Deleted
 		   AND Value LIKE ?
@@ -433,7 +447,7 @@ func healReferrersMentioning(ctx context.Context, tx *sql.Tx, path string) error
 		SELECT ReferrerID
 		  FROM my_config_tree_dep_dangling
 		 WHERE Path = ? OR Path LIKE ?
-	`, exact, prefix, tmplExact, tmplPrefix, contains, exact, prefix)
+	`, exact, prefix, tmplExact, tmplPrefix, tmplExact, tmplPrefix, contains, exact, prefix)
 	if err != nil {
 		return err
 	}
@@ -494,7 +508,7 @@ func checkParameterReferrers(ctx context.Context, tx *sql.Tx, p *Parameter) erro
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT t.Path, t.ContentType
+		SELECT t.Path, t.ContentType, t.Templated
 		  FROM my_config_tree_dep d
 		  JOIN my_config_tree t ON t.ID = d.ReferrerID
 		 WHERE d.TargetID = ? AND d.ReferrerID <> ? AND NOT t.Deleted
@@ -531,7 +545,7 @@ func checkMovedSubtreeReferrers(ctx context.Context, tx *sql.Tx, path string) er
 	// points outside keeps resolving and has no edge into the subtree, so it is
 	// correctly not matched.)
 	rows, err := tx.QueryContext(ctx, `
-		SELECT DISTINCT r.Path, r.ContentType
+		SELECT DISTINCT r.Path, r.ContentType, r.Templated
 		  FROM my_config_tree_dep d
 		  JOIN my_config_tree m ON m.ID = d.TargetID
 		  JOIN my_config_tree r ON r.ID = d.ReferrerID
@@ -562,16 +576,18 @@ func checkDepsReady(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-// referrerError drains a (Path, ContentType) result set of referrers and turns
-// it into the appropriate "still referenced" error, or nil if empty.
+// referrerError drains a (Path, ContentType, Templated) result set of
+// referrers and turns it into the appropriate "still referenced" error, or
+// nil if empty.
 func referrerError(rows *sql.Rows) error {
 	var symlinked, expanded []string
 	for rows.Next() {
 		var path, contentType string
-		if err := rows.Scan(&path, &contentType); err != nil {
+		var templated bool
+		if err := rows.Scan(&path, &contentType, &templated); err != nil {
 			return err
 		}
-		if contentType == "application/x-template" {
+		if templated || contentType == "application/x-template" {
 			expanded = append(expanded, path)
 		} else {
 			symlinked = append(symlinked, path)
@@ -616,7 +632,7 @@ func rebuildDepsBounded(depth int) error {
 	case errors.Is(err, context.DeadlineExceeded):
 		log.Error().Int("depth", depth).Dur("timeout", depsRebuildTimeout).Msgf(
 			"parameter dependency rebuild timed out; lower %s", depthParamPath)
-	case errors.Is(err, errDepsRebuildLocked):
+	case errors.Is(err, errAdvisoryLocked):
 		log.Info().Int("depth", depth).Msg("another instance is rebuilding parameter dependencies; skipping")
 	case err != nil:
 		log.Error().Err(err).Msg("failed to rebuild parameter dependencies")
@@ -688,7 +704,7 @@ func deletedParamSymlinksCheckDepth(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if param == nil || param.ContentType != "text/plain" || !param.Value.Valid {
+	if !isPlainText(param) {
 		return defaultSymlinkDepth, nil
 	}
 	depth, err := strconv.Atoi(strings.TrimSpace(param.Value.String))
@@ -722,43 +738,48 @@ func selectDepDepth(ctx context.Context, db queryRower) (int, bool, error) {
 	return depth, true, nil
 }
 
-// errDepsRebuildLocked reports that another admin instance holds the rebuild
-// lock (e.g. during a rolling deploy). Callers treat it as "try again later":
-// the startup loop retries and finds the winner's rebuild already recorded.
-var errDepsRebuildLocked = errors.New("parameter dependency rebuild is locked by another instance")
+// errAdvisoryLocked reports that another admin instance holds the requested
+// advisory lock (e.g. during a rolling deploy). Callers treat it as "try
+// again later": the deps startup loop retries and finds the winner's rebuild
+// already recorded.
+var errAdvisoryLocked = errors.New("locked by another instance")
 
 // depsRebuildLockWait bounds how long an instance waits for the advisory lock
-// before giving up with errDepsRebuildLocked.
+// before giving up with errAdvisoryLocked.
 const depsRebuildLockWait = 10 * time.Second
 
-// acquireDepsRebuildLock serializes full rebuilds across admin instances with
-// a MySQL advisory lock held on a dedicated connection (GET_LOCK is
-// connection-scoped, and the server releases it if the connection dies, so a
-// crashed rebuild cannot leave the lock stuck). The lock name is scoped to the
-// current database — advisory locks are server-wide and installations may
-// share a MySQL server. The returned release func must be called once the
-// rebuild transaction is finished.
-func acquireDepsRebuildLock(ctx context.Context) (release func(), err error) {
+// acquireAdvisoryLock serializes a maintenance operation across admin
+// instances with a MySQL advisory lock held on a dedicated connection
+// (GET_LOCK is connection-scoped, and the server releases it if the
+// connection dies, so a crashed holder cannot leave the lock stuck). The lock
+// name is scoped to the current database — advisory locks are server-wide
+// and installations may share a MySQL server. The returned release func must
+// be called once the protected work is finished.
+func acquireAdvisoryLock(ctx context.Context, name string, wait time.Duration) (release func(), err error) {
 	conn, err := DB.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var got sql.NullInt64
-	row := conn.QueryRowContext(ctx, "SELECT GET_LOCK(CONCAT(DATABASE(), '/deps-rebuild'), ?)",
-		int(depsRebuildLockWait/time.Second))
+	row := conn.QueryRowContext(ctx, "SELECT GET_LOCK(CONCAT(DATABASE(), '/', ?), ?)",
+		name, int(wait/time.Second))
 	if err := row.Scan(&got); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	if !got.Valid || got.Int64 != 1 {
 		conn.Close()
-		return nil, errDepsRebuildLocked
+		return nil, fmt.Errorf("%s: %w", name, errAdvisoryLocked)
 	}
 	return func() {
 		// ignore errors: closing the connection releases the lock anyway
-		conn.ExecContext(ctx, "DO RELEASE_LOCK(CONCAT(DATABASE(), '/deps-rebuild'))")
+		conn.ExecContext(ctx, "DO RELEASE_LOCK(CONCAT(DATABASE(), '/', ?))", name)
 		conn.Close()
 	}, nil
+}
+
+func acquireDepsRebuildLock(ctx context.Context) (release func(), err error) {
+	return acquireAdvisoryLock(ctx, "deps-rebuild", depsRebuildLockWait)
 }
 
 // rebuildDepsIfNeeded recomputes every referrer's edges at the given depth when
@@ -804,10 +825,11 @@ func rebuildDepsIfNeeded(ctx context.Context, depth int) (int, error) {
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT ID, ContentType, Value
+		SELECT ID, ContentType, Templated, Value
 		  FROM my_config_tree
 		 WHERE NOT Deleted
-		   AND ContentType IN ('application/x-symlink', 'application/x-template', 'application/x-case')
+		   AND (ContentType IN ('application/x-symlink', 'application/x-template', 'application/x-case')
+		        OR Templated)
 	`)
 	if err != nil {
 		return -1, err
@@ -815,7 +837,7 @@ func rebuildDepsIfNeeded(ctx context.Context, depth int) (int, error) {
 	referrers := make([]depNode, 0)
 	for rows.Next() {
 		var n depNode
-		if err := rows.Scan(&n.ID, &n.ContentType, &n.Value); err != nil {
+		if err := rows.Scan(&n.ID, &n.ContentType, &n.Templated, &n.Value); err != nil {
 			rows.Close()
 			return -1, err
 		}
@@ -828,7 +850,7 @@ func rebuildDepsIfNeeded(ctx context.Context, depth int) (int, error) {
 	rows.Close() // before reusing the connection below
 
 	for _, n := range referrers {
-		if err := updateNodeDeps(ctx, tx, n.ID, n.ContentType, n.Value); err != nil {
+		if err := updateNodeDeps(ctx, tx, n.ID, n.ContentType, n.Templated, n.Value); err != nil {
 			return -1, err
 		}
 	}

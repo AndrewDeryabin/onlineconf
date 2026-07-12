@@ -28,6 +28,7 @@ type Param struct {
 	MTime        string
 	Version      int
 	ContentType  string
+	Templated    bool
 	Value        NullString
 	Children     map[string]**Param
 	common       bool
@@ -85,6 +86,9 @@ func (node *Param) deepMarkCommon(ctx context.Context) {
 	switch node.ContentType {
 	case "application/x-symlink", "application/x-case", "application/x-template":
 		ok = false
+	}
+	if node.Templated {
+		ok = false // flagged parameters expand per server, like templates
 	}
 	node.common = ok
 	node.deepResolved = ok
@@ -168,7 +172,7 @@ func getTreeMTime(ctx context.Context) (string, error) {
 
 func selectTree(ctx context.Context) (*Param, error) {
 	query := `
-		SELECT ID, Name, Path, MTime, Version, ContentType, Value, ParentID
+		SELECT ID, Name, Path, MTime, Version, ContentType, Templated, Value, ParentID
 		FROM my_config_tree
 		WHERE NOT Deleted
 		ORDER BY Path
@@ -184,7 +188,7 @@ func selectTree(ctx context.Context) (*Param, error) {
 		param := Param{}
 		param.Children = make(map[string]**Param)
 		var parentID sql.NullInt64
-		err = rows.Scan(&param.ID, &param.Name, &param.Path, &param.MTime, &param.Version, &param.ContentType, &param.Value, &parentID)
+		err = rows.Scan(&param.ID, &param.Name, &param.Path, &param.MTime, &param.Version, &param.ContentType, &param.Templated, &param.Value, &parentID)
 		if err != nil {
 			return nil, err
 		}

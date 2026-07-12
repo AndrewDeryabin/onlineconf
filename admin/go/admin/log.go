@@ -20,6 +20,7 @@ type LogEntry struct {
 	Path        string     `json:"path"`
 	Version     int        `json:"version"`
 	ContentType string     `json:"mime"`
+	Templated   bool       `json:"template"`
 	Value       NullString `json:"data"`
 	MTime       string     `json:"mtime"`
 	Author      string     `json:"author"`
@@ -41,6 +42,7 @@ type LogFilter struct {
 type logNotifyEntry struct {
 	Version     int        `json:"version"`
 	ContentType string     `json:"mime"`
+	Templated   bool       `json:"template"`
 	Value       NullString `json:"data"`
 	Author      string     `json:"author"`
 	Comment     NullString `json:"comment"`
@@ -98,9 +100,9 @@ func SelectLog(ctx context.Context, filter LogFilter, lastID int) ([]LogEntry, e
 
 	query := `
 		SELECT
-			l.ID, l.NodeID, l.Path, l.Version, l.Value, l.ContentType, l.Author, l.MTime, l.Comment, l.Deleted,
+			l.ID, l.NodeID, l.Path, l.Version, l.Value, l.ContentType, l.Templated, l.Author, l.MTime, l.Comment, l.Deleted,
 			my_config_tree_access(t.ID, ?) AS RW,
-			l.ContentType = t.ContentType AND ((l.Value IS NULL AND t.Value IS NULL) OR l.Value = t.Value) AND l.Deleted = t.Deleted AS Same
+			l.ContentType = t.ContentType AND l.Templated = t.Templated AND ((l.Value IS NULL AND t.Value IS NULL) OR l.Value = t.Value) AND l.Deleted = t.Deleted AS Same
 		FROM my_config_tree_log l JOIN my_config_tree t ON t.ID = l.NodeID
 	`
 	if len(condition) > 0 {
@@ -116,7 +118,7 @@ func SelectLog(ctx context.Context, filter LogFilter, lastID int) ([]LogEntry, e
 	list := make([]LogEntry, 0)
 	for rows.Next() {
 		var l LogEntry
-		err := rows.Scan(&l.ID, &l.NodeID, &l.Path, &l.Version, &l.Value, &l.ContentType, &l.Author, &l.MTime, &l.Comment, &l.Deleted, &l.RW, &l.Same)
+		err := rows.Scan(&l.ID, &l.NodeID, &l.Path, &l.Version, &l.Value, &l.ContentType, &l.Templated, &l.Author, &l.MTime, &l.Comment, &l.Deleted, &l.RW, &l.Same)
 		if err != nil {
 			return nil, err
 		}
@@ -133,8 +135,8 @@ func LogLastVersion(ctx context.Context, tx *sql.Tx, path, comment string) error
 		return ErrCommentRequired
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO my_config_tree_log (NodeID, Path, Version, Value, ContentType, Author, MTime, Comment, Deleted)
-		SELECT ID, Path, Version, Value, ContentType, ?, MTime, ?, Deleted
+		INSERT INTO my_config_tree_log (NodeID, Path, Version, Value, ContentType, Templated, Author, MTime, Comment, Deleted)
+		SELECT ID, Path, Version, Value, ContentType, Templated, ?, MTime, ?, Deleted
 		FROM my_config_tree
 		WHERE Path = ?
 	`, Username(ctx), comment, path)
@@ -167,8 +169,8 @@ func LogLastVersion(ctx context.Context, tx *sql.Tx, path, comment string) error
 // skipped — they are tombstones and keep their pre-move path.
 func LogMovedDescendants(ctx context.Context, tx *sql.Tx, newPath, comment string) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO my_config_tree_log (NodeID, Path, Version, Value, ContentType, Author, MTime, Comment, Deleted, Silent)
-		SELECT ID, Path, Version, Value, ContentType, ?, MTime, ?, Deleted, true
+		INSERT INTO my_config_tree_log (NodeID, Path, Version, Value, ContentType, Templated, Author, MTime, Comment, Deleted, Silent)
+		SELECT ID, Path, Version, Value, ContentType, Templated, ?, MTime, ?, Deleted, true
 		FROM my_config_tree
 		WHERE Path LIKE ? AND NOT Deleted
 	`, Username(ctx), comment, likeEscape(newPath)+"/%")
@@ -196,7 +198,7 @@ func notify(ctx context.Context, tx *sql.Tx, versionId int64) error {
 	}
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT l.Version, l.Value, l.ContentType, l.Author, l.Comment, l.Deleted
+		SELECT l.Version, l.Value, l.ContentType, l.Templated, l.Author, l.Comment, l.Deleted
 		FROM (SELECT NodeID, Version FROM my_config_tree_log WHERE ID = ?) s
 		JOIN my_config_tree_log l ON l.NodeID = s.NodeID AND (l.Version BETWEEN s.Version - 1 AND s.Version)
 		ORDER BY l.ID DESC
@@ -209,14 +211,14 @@ func notify(ctx context.Context, tx *sql.Tx, versionId int64) error {
 		return ErrNoSuchVersion
 	}
 	var new logNotifyEntry
-	err = rows.Scan(&new.Version, &new.Value, &new.ContentType, &new.Author, &new.Comment, &new.Deleted)
+	err = rows.Scan(&new.Version, &new.Value, &new.ContentType, &new.Templated, &new.Author, &new.Comment, &new.Deleted)
 	if err != nil {
 		return err
 	}
 	message := string(avatars[int(crc32.ChecksumIEEE([]byte(new.Author)))%len(avatars)]) + " " + new.Author + "\n"
 	if rows.Next() {
 		var old logNotifyEntry
-		err := rows.Scan(&old.Version, &old.Value, &old.ContentType, &old.Author, &old.Comment, &old.Deleted)
+		err := rows.Scan(&old.Version, &old.Value, &old.ContentType, &old.Templated, &old.Author, &old.Comment, &old.Deleted)
 		if err != nil {
 			return err
 		}
@@ -236,26 +238,26 @@ func notify(ctx context.Context, tx *sql.Tx, versionId int64) error {
 	if !new.Deleted && notification == "with-value" {
 		message += " ➾ "
 		if new.Value.Valid {
-			message += contentTypeSymbol(new.ContentType)
+			message += valueSymbol(new.ContentType, new.Templated)
 			if new.ContentType == "application/x-case" {
-				var data []map[string]string
+				var data []caseBranch
 				err = json.Unmarshal([]byte(new.Value.String), &data)
 				if err == nil {
 					for _, c := range data {
 						message += "\n"
-						if s, ok := c["server"]; ok {
-							message += "ⓗ«" + s + "»: "
-						} else if g, ok := c["group"]; ok {
-							message += "ⓖ«" + g + "»: "
-						} else if d, ok := c["datacenter"]; ok {
-							message += "ⓓ«" + d + "»: "
-						} else if s, ok := c["service"]; ok {
-							message += "ⓢ«" + s + "»: "
+						if c.Server.Valid {
+							message += "ⓗ«" + c.Server.String + "»: "
+						} else if c.Group.Valid {
+							message += "ⓖ«" + c.Group.String + "»: "
+						} else if c.Datacenter.Valid {
+							message += "ⓓ«" + c.Datacenter.String + "»: "
+						} else if c.Service.Valid {
+							message += "ⓢ«" + c.Service.String + "»: "
 						} else {
 							message += "☆️: "
 						}
-						if v, ok := c["value"]; ok && c["mime"] != "application/x-null" {
-							message += contentTypeSymbol(c["mime"]) + "«" + v + "»"
+						if c.Value.Valid && c.ContentType.String != "application/x-null" {
+							message += valueSymbol(c.ContentType.String, c.Templated) + "«" + c.Value.String + "»"
 						} else {
 							message += "∅"
 						}
@@ -274,6 +276,18 @@ func notify(ctx context.Context, tx *sql.Tx, versionId int64) error {
 		message += "\n🗒 " + new.Comment.String
 	}
 	return emitNotification(ctx, message)
+}
+
+// valueSymbol renders the value-type marker of a notification message: the
+// content-type symbol, prefixed with the template scissors when the value
+// carries the template flag (a legacy application/x-template value keeps its
+// bare ✄ from contentTypeSymbol).
+func valueSymbol(contentType string, templated bool) string {
+	symbol := contentTypeSymbol(contentType)
+	if templated {
+		return "✄" + symbol
+	}
+	return symbol
 }
 
 func contentTypeSymbol(contentType string) string {

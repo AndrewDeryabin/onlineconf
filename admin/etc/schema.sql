@@ -5,6 +5,7 @@ CREATE TABLE `my_config_tree` (
     `Path` varchar(512) character set ascii collate ascii_bin NOT NULL,
     `Value` mediumtext character set utf8mb4 collate utf8mb4_bin,
     `ContentType` varchar(255) character set ascii NOT NULL default 'application/x-null',
+    `Templated` tinyint(1) NOT NULL default '0',
     `Summary` varchar(255) NOT NULL default '',
     `Description` varchar(8192) NOT NULL default '',
     `Version` int(11) NOT NULL default '1',
@@ -16,6 +17,7 @@ CREATE TABLE `my_config_tree` (
     UNIQUE KEY `Path` (`Path`),
     UNIQUE KEY `Name` (`ParentID`,`Name`),
     KEY `ContentType` (`ContentType`),
+    KEY `Templated` (`Templated`),
     CONSTRAINT `my_config_tree_ibfk_1` FOREIGN KEY (`ParentID`) REFERENCES `my_config_tree` (`ID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -59,6 +61,7 @@ CREATE TABLE `my_config_tree_log` (
     `Version` int(11) NOT NULL,
     `Value` mediumtext character set utf8mb4 collate utf8mb4_bin,
     `ContentType` varchar(255) character set ascii NOT NULL default 'application/x-null',
+    `Templated` tinyint(1) NOT NULL default '0',
     `Author` varchar(128) character set ascii NOT NULL,
     `MTime` timestamp NOT NULL default CURRENT_TIMESTAMP,
     `Comment` varchar(512) default NULL,
@@ -244,8 +247,8 @@ INSERT INTO `my_config_tree` (`ID`, `Name`, `ParentID`, `Notification`) VALUES
     (3, 'module', 2, NULL),
     (4, 'service', 2, NULL);
 
-INSERT INTO `my_config_tree_log` (`NodeID`, `Path`, `Version`, `Value`, `ContentType`, `Author`, `MTime`, `Comment`, `Deleted`)
-SELECT `ID`, `Path`, `Version`, `Value`, `ContentType`, 'onlineconf', `MTime`, 'Init onlineconf', `Deleted` FROM `my_config_tree` ORDER BY `ID`;
+INSERT INTO `my_config_tree_log` (`NodeID`, `Path`, `Version`, `Value`, `ContentType`, `Templated`, `Author`, `MTime`, `Comment`, `Deleted`)
+SELECT `ID`, `Path`, `Version`, `Value`, `ContentType`, `Templated`, 'onlineconf', `MTime`, 'Init onlineconf', `Deleted` FROM `my_config_tree` ORDER BY `ID`;
 
 INSERT INTO `my_config_group` (`Name`) VALUES ('root');
 

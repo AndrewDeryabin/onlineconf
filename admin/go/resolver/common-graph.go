@@ -163,7 +163,11 @@ func (cr commonCaseResolver) resolveCase(context.Context, *Param) *Case {
 }
 
 func (cr commonCaseResolver) getTemplateVar(string) (string, bool) {
-	panic("Dummy")
+	// The common graph has no server context, so no variable resolves here.
+	// Returning "not found" (instead of the historical panic) leaves such a
+	// parameter merely dirty: the readers of /onlineconf/... internals fail
+	// soft on that one value instead of killing the whole tree-sync tick.
+	return "", false
 }
 
 func readIPNets(param *Param) ([]net.IPNet, error) {

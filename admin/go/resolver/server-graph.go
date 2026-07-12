@@ -246,6 +246,12 @@ func (cr serverCaseResolver) resolveCase(ctx context.Context, param *Param) *Cas
 	return &Case{ContentType: "application/x-null"}
 }
 
+// TemplateVars are the predefined (non-path) template variables expanded
+// server-side; getTemplateVar must match exactly this set. The list is served
+// by /ui-config so the frontend's variable classification (which placeholders
+// expand here vs. on the updater) cannot drift from the resolver.
+var TemplateVars = []string{"hostname", "hostname -s", "short_hostname", "hostname -i", "ip"}
+
 func (cr serverCaseResolver) getTemplateVar(name string) (string, bool) {
 	switch name {
 	case "hostname":

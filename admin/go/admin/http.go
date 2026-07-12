@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	. "github.com/onlineconf/onlineconf/admin/go/common"
+	"github.com/onlineconf/onlineconf/admin/go/resolver"
 )
 
 var writeError = WriteErrorFunc(map[error]ErrorResponse{
@@ -27,6 +29,9 @@ var writeError = WriteErrorFunc(map[error]ErrorResponse{
 	ErrDeletedSymlink:  {HTTPCode: 400, ErrorCode: "DeletedSymlink"},
 	ErrDeletedTmpl:     {HTTPCode: 400, ErrorCode: "DeletedTemplate"},
 	ErrDepsNotReady:    {HTTPCode: 503, ErrorCode: "DepsNotReady"},
+
+	ErrTemplateFlagNotAllowed: {HTTPCode: 400, ErrorCode: "TemplateFlagNotAllowed"},
+	ErrTemplateFlagDisabled:   {HTTPCode: 400, ErrorCode: "TemplateFlagDisabled"},
 })
 var writeResponse = WriteResponseOrErrorFunc(writeError)
 
@@ -97,12 +102,41 @@ func serveGetConfig(w http.ResponseWriter, req *http.Request) {
 	writeResponse(req.Context(), w, data, err)
 }
 
+// templateFlagField parses the optional "template" form field. It is
+// tri-state: an absent field yields an invalid NullBool — SetParameter then
+// preserves the stored flag (a client unaware of the field must not strip it
+// by round-tripping mime+data) and CreateParameter defaults to false. While
+// the feature switch is off, any request mentioning the field is refused
+// whatever its value: a client that knows about the flag must not run ahead
+// of the operator's opt-out.
+func templateFlagField(ctx context.Context, f url.Values) (NullBool, error) {
+	var templated NullBool
+	if _, ok := f["template"]; !ok {
+		return templated, nil
+	}
+	enabled, err := isTemplateFlagEnabled(ctx)
+	if err != nil {
+		return templated, err
+	}
+	if !enabled {
+		return templated, ErrTemplateFlagDisabled
+	}
+	templated.Valid = true
+	templated.Bool = f.Get("template") == "1"
+	return templated, nil
+}
+
 func serveSetConfig(w http.ResponseWriter, req *http.Request) {
 	path := mux.Vars(req)["path"]
 	req.ParseForm()
 	f := req.PostForm
 
-	var err error
+	templated, err := templateFlagField(req.Context(), f)
+	if err != nil {
+		writeError(req.Context(), w, err)
+		return
+	}
+
 	if verstr := f.Get("version"); verstr != "" {
 		var version int
 		version, err = strconv.Atoi(verstr)
@@ -117,10 +151,10 @@ func serveSetConfig(w http.ResponseWriter, req *http.Request) {
 			// (the old path either holds a symlink or nothing at all)
 			path = newPath
 		} else {
-			err = SetParameter(req.Context(), path, version, f.Get("mime"), f.Get("data"), f.Get("comment"))
+			err = SetParameter(req.Context(), path, version, f.Get("mime"), templated, f.Get("data"), f.Get("comment"))
 		}
 	} else if contentType := f.Get("mime"); contentType != "" {
-		err = CreateParameter(req.Context(), path, contentType, f.Get("data"), optValue(f, "summary"), optValue(f, "description"), optValue(f, "notification"), f.Get("comment"))
+		err = CreateParameter(req.Context(), path, contentType, templated.Valid && templated.Bool, f.Get("data"), optValue(f, "summary"), optValue(f, "description"), optValue(f, "notification"), f.Get("comment"))
 	} else {
 		_, nOk := f["notification"]
 		_, sOk := f["summary"]
@@ -355,7 +389,9 @@ const avatarPath = "/onlineconf/ui/avatar"
 var errInvalidAvatarContentType = errors.New("invalid content-type")
 
 type UIConfig struct {
-	Avatar *Avatar `json:"avatar,omitempty"`
+	Avatar       *Avatar  `json:"avatar,omitempty"`
+	TemplateFlag bool     `json:"template_flag"`
+	TemplateVars []string `json:"template_vars"`
 }
 
 type Avatar struct {
@@ -377,13 +413,28 @@ type Avatar struct {
 // - any data MUST be decoded using an explicit schema
 func serveUIConfig(w http.ResponseWriter, req *http.Request) {
 	var config UIConfig
+
+	enabled, err := isTemplateFlagEnabled(req.Context())
+	if err != nil {
+		writeError(req.Context(), w, err)
+		return
+	}
+	config.TemplateFlag = enabled
+	// the canonical list lives next to the resolver code that expands the
+	// variables, so the frontend's classification cannot drift from it
+	config.TemplateVars = resolver.TemplateVars
+
 	avatarParam, err := SelectParameter(req.Context(), avatarPath)
 	if avatarParam != nil {
 		var avatar Avatar
-		switch avatarParam.ContentType {
-		case "application/json":
+		switch {
+		case avatarParam.Templated:
+			// the admin cannot evaluate templates: a flagged value is as
+			// unusable here as one of the wrong type
+			err = errInvalidAvatarContentType
+		case avatarParam.ContentType == "application/json":
 			err = json.Unmarshal([]byte(avatarParam.Value.String), &avatar)
-		case "application/x-yaml":
+		case avatarParam.ContentType == "application/x-yaml":
 			err = yaml.Unmarshal([]byte(avatarParam.Value.String), &avatar)
 		default:
 			err = errInvalidAvatarContentType

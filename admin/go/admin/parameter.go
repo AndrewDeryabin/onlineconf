@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -29,10 +30,13 @@ var (
 	ErrDeletedSymlink  = errors.New("Parameter being deleted is symlinked")
 	ErrDeletedTmpl     = errors.New("Parameter being deleted is referred from template(s)")
 	ErrDepsNotReady    = errors.New("Parameter dependency data is initializing, retry later")
+
+	ErrTemplateFlagNotAllowed = errors.New("Template flag is not allowed for this content type")
+	ErrTemplateFlagDisabled   = errors.New("Template flag is disabled, see " + templateFlagPath)
 )
 
 const selectFields string = `
-	SELECT t.ID, t.Name, t.ParentID, t.Path, t.Value, t.ContentType, t.Summary, t.Description, t.Version, t.MTime, t.Deleted,
+	SELECT t.ID, t.Name, t.ParentID, t.Path, t.Value, t.ContentType, t.Templated, t.Summary, t.Description, t.Version, t.MTime, t.Deleted,
 	(SELECT count(*) FROM my_config_tree c WHERE c.ParentID = t.ID AND NOT c.Deleted) AS NumChildren,
 	(SELECT count(*) <> 0 FROM my_config_tree_group g WHERE g.NodeID = t.ID) AS AccessModified,
 		my_config_tree_access(t.ID, ?) AS RW,
@@ -51,6 +55,7 @@ type Parameter struct {
 	Path                 string        `json:"path"`
 	Value                NullString    `json:"data"`
 	ContentType          string        `json:"mime"`
+	Templated            bool          `json:"template"`
 	Summary              string        `json:"summary"`
 	Description          string        `json:"description"`
 	Version              int           `json:"version"`
@@ -69,7 +74,7 @@ func SelectParameter(ctx context.Context, path string) (*Parameter, error) {
 	row := DB.QueryRowContext(ctx, query, Username(ctx), path)
 	p := Parameter{}
 	err := row.Scan(
-		&p.ID, &p.Name, &p.ParentID, &p.Path, &p.Value, &p.ContentType,
+		&p.ID, &p.Name, &p.ParentID, &p.Path, &p.Value, &p.ContentType, &p.Templated,
 		&p.Summary, &p.Description, &p.Version, &p.MTime, &p.Deleted,
 		&p.NumChildren, &p.AccessModified, &p.RW, &p.Notification, &p.NotificationModified,
 	)
@@ -180,7 +185,7 @@ func selectChildren(ctx context.Context, params []ParameterWithDescendants) erro
 	for rows.Next() {
 		c := Parameter{}
 		err := rows.Scan(
-			&c.ID, &c.Name, &c.ParentID, &c.Path, &c.Value, &c.ContentType,
+			&c.ID, &c.Name, &c.ParentID, &c.Path, &c.Value, &c.ContentType, &c.Templated,
 			&c.Summary, &c.Description, &c.Version, &c.MTime, &c.Deleted,
 			&c.NumChildren, &c.AccessModified, &c.RW, &c.Notification, &c.NotificationModified,
 		)
@@ -382,7 +387,7 @@ func SearchParameters(ctx context.Context, term string) ([]Parameter, error) {
 	return list, nil
 }
 
-func CreateParameter(ctx context.Context, path, contentType, value string, optSummary, optDescription, optNotification NullString, comment string) error {
+func CreateParameter(ctx context.Context, path, contentType string, templated bool, value string, optSummary, optDescription, optNotification NullString, comment string) error {
 	ctx, sink := withNotifications(ctx)
 	var nullValue NullString
 	if contentType != "application/x-null" {
@@ -390,7 +395,7 @@ func CreateParameter(ctx context.Context, path, contentType, value string, optSu
 		nullValue.String = value
 	}
 
-	if err := validateParameter(ctx, contentType, nullValue); err != nil {
+	if err := validateParameter(ctx, contentType, templated, nullValue); err != nil {
 		return err
 	}
 
@@ -428,15 +433,17 @@ func CreateParameter(ctx context.Context, path, contentType, value string, optSu
 	var deleted bool
 	err = row.Scan(&deleted)
 	if err == sql.ErrNoRows {
-		_, err = tx.ExecContext(ctx, "INSERT INTO my_config_tree (ParentID, Name, ContentType, Value, Summary, Description, Notification) VALUES (?, ?, ?, ?, ?, ?, ?)",
-			parent.ID, name, contentType, nullValue, optSummary.String, optDescription.String, notification)
+		_, err = tx.ExecContext(ctx, "INSERT INTO my_config_tree (ParentID, Name, ContentType, Templated, Value, Summary, Description, Notification) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			parent.ID, name, contentType, templated, nullValue, optSummary.String, optDescription.String, notification)
 	} else if err == nil {
 		if !deleted {
 			tx.Rollback()
 			return ErrAlreadyExists
 		}
-		fields := "ContentType = ?, Value = ?, "
-		bind := []interface{}{contentType, nullValue}
+		// Templated is set unconditionally: a resurrected row must not inherit
+		// the flag from its previous, unrelated life as a soft-deleted zombie.
+		fields := "ContentType = ?, Templated = ?, Value = ?, "
+		bind := []interface{}{contentType, templated, nullValue}
 		if optSummary.Valid {
 			fields += "Summary = ?, "
 			bind = append(bind, optSummary.String)
@@ -453,7 +460,7 @@ func CreateParameter(ctx context.Context, path, contentType, value string, optSu
 		_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET "+fields+"Version = Version + 1, MTime = now(), Deleted = false WHERE Path = ?", bind...)
 	}
 	if err == nil {
-		err = updateParameterDepsByPath(ctx, tx, path, contentType, nullValue)
+		err = updateParameterDepsByPath(ctx, tx, path, contentType, templated, nullValue)
 	}
 	if err == nil {
 		// referrers written while this path was missing carry no edges to it
@@ -473,16 +480,12 @@ func CreateParameter(ctx context.Context, path, contentType, value string, optSu
 	return nil
 }
 
-func SetParameter(ctx context.Context, path string, version int, contentType string, value string, comment string) error {
+func SetParameter(ctx context.Context, path string, version int, contentType string, templated NullBool, value string, comment string) error {
 	ctx, sink := withNotifications(ctx)
 	var nullValue NullString
 	if contentType != "application/x-null" {
 		nullValue.Valid = true
 		nullValue.String = value
-	}
-
-	if err := validateParameter(ctx, contentType, nullValue); err != nil {
-		return err
 	}
 
 	tx, err := DB.BeginTx(ctx, nil)
@@ -499,9 +502,23 @@ func SetParameter(ctx context.Context, path string, version int, contentType str
 		tx.Rollback()
 		return ErrVersionNotMatch
 	}
-	_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET ContentType = ?, Value = ?, Version = Version + 1, MTime = now() WHERE Path = ?", contentType, nullValue, path)
+
+	// The template field is tri-state: absent preserves the stored flag, so
+	// clients unaware of it cannot strip it by round-tripping mime+data.
+	// Changing the type to one that cannot carry the flag clears it instead
+	// of failing a write that never mentioned it.
+	effectiveTemplated := p.Templated && templateEligible(contentType)
+	if templated.Valid {
+		effectiveTemplated = templated.Bool
+	}
+	if err := validateParameter(ctx, contentType, effectiveTemplated, nullValue); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx, "UPDATE my_config_tree SET ContentType = ?, Templated = ?, Value = ?, Version = Version + 1, MTime = now() WHERE Path = ?", contentType, effectiveTemplated, nullValue, path)
 	if err == nil {
-		err = updateNodeDeps(ctx, tx, p.ID, contentType, nullValue)
+		err = updateNodeDeps(ctx, tx, p.ID, contentType, effectiveTemplated, nullValue)
 	}
 	if err == nil && depsRedirectChanged(p.ContentType, contentType) {
 		// the change may redirect referrers resolving through this node
@@ -602,7 +619,7 @@ func MoveParameter(ctx context.Context, path string, newPath string, symlink boo
 			var linkTarget NullString
 			linkTarget.Valid = true
 			linkTarget.String = newPath
-			err = updateParameterDepsByPath(ctx, tx, path, "application/x-symlink", linkTarget)
+			err = updateParameterDepsByPath(ctx, tx, path, "application/x-symlink", false, linkTarget)
 		}
 		if err == nil {
 			err = LogLastVersion(ctx, tx, path, fmt.Sprintf("Moved to %s. %s", newPath, comment))
@@ -775,8 +792,38 @@ func isDeletedParamSymlinksCheckDisabled(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	if param == nil || param.ContentType != "text/plain" || !param.Value.Valid {
+	if !isPlainText(param) {
 		return false, nil
+	}
+
+	return param.Value.String != "" && param.Value.String != "0", nil
+}
+
+// isPlainText reports whether the parameter holds a plain, unflagged
+// text/plain value — the only form the admin-internal readers of
+// /onlineconf/... control parameters accept. The admin cannot evaluate
+// templates (it has no server context), so a flagged value is treated the
+// same as a value of the wrong type.
+func isPlainText(param *Parameter) bool {
+	return param != nil && param.ContentType == "text/plain" && !param.Templated && param.Value.Valid
+}
+
+const templateFlagPath = "/onlineconf/template-flag"
+
+// isTemplateFlagEnabled reports whether templated parameters may be written.
+// The parameter is an opt-out, absent means enabled: a fresh installation
+// gets the feature with no setup, while an existing installation creates the
+// parameter with "0" before upgrading its fleet (a flagged row read by an
+// old binary is served as literal text) and lifts the opt-out once every
+// instance runs a binary that understands the flag.
+func isTemplateFlagEnabled(ctx context.Context) (bool, error) {
+	param, err := SelectParameterResolvingSymlink(ctx, templateFlagPath)
+	if err != nil {
+		return false, err
+	}
+
+	if !isPlainText(param) {
+		return true, nil
 	}
 
 	return param.Value.String != "" && param.Value.String != "0", nil
@@ -786,7 +833,7 @@ func selectParameterForUpdate(ctx context.Context, tx *sql.Tx, path string) (*Pa
 	row := tx.QueryRowContext(ctx, selectFromConfig+"WHERE Path = ? AND NOT Deleted FOR UPDATE", Username(ctx), path)
 	p := Parameter{}
 	err := row.Scan(
-		&p.ID, &p.Name, &p.ParentID, &p.Path, &p.Value, &p.ContentType,
+		&p.ID, &p.Name, &p.ParentID, &p.Path, &p.Value, &p.ContentType, &p.Templated,
 		&p.Summary, &p.Description, &p.Version, &p.MTime, &p.Deleted,
 		&p.NumChildren, &p.AccessModified, &p.RW, &p.Notification, &p.NotificationModified,
 	)
@@ -802,7 +849,51 @@ func selectParameterForUpdate(ctx context.Context, tx *sql.Tx, path string) (*Pa
 	return &p, nil
 }
 
-func validateParameter(ctx context.Context, contentType string, value NullString) error {
+// templateEligible reports whether a value of the given content type may
+// carry the template flag: everything except the types whose value is not
+// free text (null has no value; symlink and case values are structural —
+// case branches carry their own per-branch flag instead). The legacy
+// template type encodes templating in the type itself and must not carry
+// the flag on top.
+func templateEligible(contentType string) bool {
+	switch contentType {
+	case "application/x-null", "application/x-symlink", "application/x-case", "application/x-template":
+		return false
+	}
+	return true
+}
+
+// templatePlaceholderRe matches every ${...} placeholder, path-based or not —
+// the same non-greedy pattern the resolver substitutes by.
+var templatePlaceholderRe = regexp.MustCompile(`\$\{.*?\}`)
+
+// substituteTemplateDummy replaces every ${...} placeholder with the literal
+// 0 so the declared type of a templated value can be structurally validated:
+// 0 is valid both inside a JSON/YAML string ("${/x}" -> "0") and in a bare
+// position ("port": ${/x} -> "port": 0). Substitution-time syntactic safety
+// (a runtime value containing a quote) remains the author's responsibility —
+// expansion is textual.
+func substituteTemplateDummy(value string) string {
+	return templatePlaceholderRe.ReplaceAllString(value, "0")
+}
+
+// caseBranch is one entry of a case value. Absent condition keys stay
+// invalid NullStrings, mirroring the resolver's selection semantics. Unknown
+// keys are ignored, as they always were.
+type caseBranch struct {
+	Server      NullString `json:"server"`
+	Group       NullString `json:"group"`
+	Datacenter  NullString `json:"datacenter"`
+	Service     NullString `json:"service"`
+	ContentType NullString `json:"mime"`
+	Value       NullString `json:"value"`
+	Templated   bool       `json:"template"`
+}
+
+func validateParameter(ctx context.Context, contentType string, templated bool, value NullString) error {
+	if templated && !templateEligible(contentType) {
+		return ErrTemplateFlagNotAllowed
+	}
 	switch contentType {
 	case "application/x-null":
 		if value.Valid {
@@ -820,14 +911,22 @@ func validateParameter(ctx context.Context, contentType string, value NullString
 		if !value.Valid {
 			return ErrInvalidValue
 		}
+		text := value.String
+		if templated {
+			text = substituteTemplateDummy(text)
+		}
 		var i interface{}
-		return json.Unmarshal([]byte(value.String), &i)
+		return json.Unmarshal([]byte(text), &i)
 	case "application/x-yaml":
 		if !value.Valid {
 			return ErrInvalidValue
 		}
+		text := value.String
+		if templated {
+			text = substituteTemplateDummy(text)
+		}
 		var i interface{}
-		return yaml.Unmarshal([]byte(value.String), &i)
+		return yaml.Unmarshal([]byte(text), &i)
 	case "application/x-symlink":
 		if !value.Valid {
 			return ErrInvalidValue
@@ -844,17 +943,17 @@ func validateParameter(ctx context.Context, contentType string, value NullString
 		if !value.Valid {
 			return ErrInvalidValue
 		}
-		var cases []map[string]NullString
+		var cases []caseBranch
 		if err := json.Unmarshal([]byte(value.String), &cases); err != nil {
 			return err
 		}
 		def := 0
 		for _, c := range cases {
 			i := 0
-			for _, key := range []string{"server", "group", "datacenter", "service"} {
-				if c[key].Valid {
+			for _, cond := range []NullString{c.Server, c.Group, c.Datacenter, c.Service} {
+				if cond.Valid {
 					i++
-					if c[key].String == "" {
+					if cond.String == "" {
 						return ErrInvalidValue
 					}
 				}
@@ -864,7 +963,7 @@ func validateParameter(ctx context.Context, contentType string, value NullString
 			} else if i > 1 {
 				return ErrInvalidValue
 			}
-			if err := validateParameter(ctx, c["mime"].String, c["value"]); err != nil {
+			if err := validateParameter(ctx, c.ContentType.String, c.Templated, c.Value); err != nil {
 				return err
 			}
 		}
