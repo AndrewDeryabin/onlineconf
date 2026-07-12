@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"io/ioutil"
 	"net"
@@ -24,6 +25,15 @@ import (
 
 var configFile = flag.String("config", "/usr/local/etc/onlineconf-admin.yaml", "config file")
 
+var (
+	convertTemplateTypes = flag.Bool("convert-template-types", false,
+		"one-shot: rewrite legacy application/x-template parameters (node values and case branches) to the template-flag form, then exit")
+	convertReverse = flag.Bool("reverse", false,
+		"with -convert-template-types: convert the flag form back to application/x-template")
+	convertForce = flag.Bool("force", false,
+		"with -convert-template-types -reverse: demote typed templated parameters to the legacy untyped form even though the type their consumers see changes")
+)
+
 type ConfigFile struct {
 	HTTP struct {
 		Listen string
@@ -45,6 +55,15 @@ func main() {
 	flag.Parse()
 	config = readConfigFile(*configFile)
 	CommonInitialize(config.CommonConfig)
+
+	if *convertTemplateTypes {
+		// one-shot operator mode: no server, no auth, no deps backfill
+		if err := admin.ConvertTemplateTypes(context.Background(), *convertReverse, *convertForce); err != nil {
+			log.Fatal().Err(err).Msg("template conversion failed")
+		}
+		return
+	}
+
 	admin.Initialize(config.AdminConfig)
 	resolver.Initialize()
 
