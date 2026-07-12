@@ -5,6 +5,22 @@ import { DistributiveOmit } from '@mui/types';
 export interface ValueProps {
 	type: ParamType;
 	value: string | null;
+	template?: boolean;
+}
+
+// Types whose values may carry the template flag: everything except the
+// special types whose value is not free text. Must match templateEligible in
+// the backend (admin/go/admin/parameter.go).
+export function templateEligible(type: ParamType): boolean {
+	switch (type) {
+		case 'application/x-null':
+		case 'application/x-symlink':
+		case 'application/x-case':
+		case 'application/x-template':
+			return false;
+		default:
+			return true;
+	}
 }
 
 export interface EditValueProps extends ValueProps {

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { SvgIconProps } from '@mui/material/SvgIcon';
+import Badge from '@mui/material/Badge';
 
 import DefaultIcon from '@mui/icons-material/Settings';
 import RootIcon from '@mui/icons-material/Language';
@@ -30,12 +31,13 @@ const iconByType: { [P in ParamType]: React.ComponentType<SvgIconProps> } = {
 
 interface ParamIconProps extends SvgIconProps {
 	type: ParamType;
+	template?: boolean;
 	path?: string;
 	numChildren?: number;
 }
 
 export default function ParamIcon(props: ParamIconProps) {
-	const { type, path, name, numChildren, ...rest } = props;
+	const { type, template, path, name, numChildren, ...rest } = props;
 	let Icon = iconByType[type] || DefaultIcon;
 
 	if (type === 'application/x-null') {
@@ -46,6 +48,15 @@ export default function ParamIcon(props: ParamIconProps) {
 		} else if (numChildren !== undefined && numChildren > 0) {
 			Icon = FolderIcon;
 		}
+	}
+	if (template) {
+		// the base type icon stays (a templated JSON still reads as JSON);
+		// a small template badge marks the flag
+		return (
+			<Badge badgeContent={<TemplateIcon sx={{ fontSize: 10 }}/>} overlap="circular" anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}>
+				<Icon {...rest}/>
+			</Badge>
+		);
 	}
 	return <Icon {...rest}/>;
 }

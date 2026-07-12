@@ -132,13 +132,20 @@ export default withStyles(styles)(withTranslation()(
 		}
 
 		createDataHandler(id: number) {
-			return ({ type, value }: { type?: ParamType, value?: string | null }) => {
+			return ({ type, value, template }: { type?: ParamType, value?: string | null, template?: boolean }) => {
 				this.handleChange(cases => {
 					if (type !== undefined) {
 						cases[id].mime = type;
 					}
 					if (value !== undefined) {
 						cases[id].value = value;
+					}
+					// present only when set, keeping unflagged branches in
+					// their historical JSON shape
+					if (template) {
+						cases[id].template = true;
+					} else {
+						delete cases[id].template;
 					}
 				});
 			};
@@ -295,7 +302,7 @@ export default withStyles(styles)(withTranslation()(
 									{caseKey}
 								</div>
 								<div className={classes.caseValue}>
-									<TypeValueFields type={c.mime} value={c.value} onChange={this.createDataHandler(i)} onError={this.props.onError}/>
+									<TypeValueFields type={c.mime} value={c.value} template={c.template} onChange={this.createDataHandler(i)} onError={this.props.onError}/>
 								</div>
 							</div>
 						);

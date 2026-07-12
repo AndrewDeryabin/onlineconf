@@ -13,7 +13,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 
 import EditIcon from '@mui/icons-material/Edit';
 
-import { ParamDialogProps, ValueProps } from './common';
+import { ParamDialogProps, ValueProps, templateEligible } from './common';
 import ParamDialogTitle from './ParamDialogTitle';
 import { ValueView } from './value';
 import * as API from '../api';
@@ -21,6 +21,7 @@ import axios from 'axios';
 import Editor, { EditorProps } from './Editor';
 import ErrorContext from './ErrorContext';
 import NoAccess from './NoAccess';
+import { TemplateConfigContext } from './UIConfig';
 
 
 const useStyles = makeStyles((theme: Theme) => ({
@@ -54,6 +55,7 @@ export default function RollbackDialog(props: RollbackDialogProps) {
 	const fullScreen = useMediaQuery(theme.breakpoints.down('md'));
 
 	const genericOnError = React.useContext(ErrorContext);
+	const templateConfig = React.useContext(TemplateConfigContext);
 	const [ current, setCurrent ] = React.useState<API.IParam | null>();
 	const [ comment, setComment ] = React.useState('');
 	const [ editor, setEditor ] = React.useState<JSX.Element>();
@@ -86,12 +88,13 @@ export default function RollbackDialog(props: RollbackDialogProps) {
 	};
 
 	const handleEdit = current !== null
-		? (edit: Required<Pick<EditorProps, 'path' | 'type' | 'value'>>) => setEditor(
+		? (edit: Required<Pick<EditorProps, 'path' | 'type' | 'value'>> & Pick<EditorProps, 'template'>) => setEditor(
 			<Editor
 				path={edit.path}
 				version={current.version}
 				type={edit.type}
 				value={edit.value}
+				template={edit.template}
 				summary={current.summary}
 				description={current.description}
 				onChange={changeDone}
@@ -116,6 +119,9 @@ export default function RollbackDialog(props: RollbackDialogProps) {
 				...ver,
 				mime: props.type,
 				data: props.value,
+				// restore the flag of the rolled-back version; sent only while
+				// the feature is on (the server refuses the field otherwise)
+				template: templateConfig.enabled && templateEligible(props.type) ? props.template || false : undefined,
 				comment,
 			})
 				.then(changeDone)
@@ -134,7 +140,7 @@ export default function RollbackDialog(props: RollbackDialogProps) {
 							{handleEdit && (
 								<div className={classes.edit}>
 									<IconButton
-										onClick={() => handleEdit({ path: current.path, type: current.mime, value: current.data })}
+										onClick={() => handleEdit({ path: current.path, type: current.mime, value: current.data, template: current.template })}
 										size="large">
 										<EditIcon/>
 									</IconButton>
@@ -142,7 +148,7 @@ export default function RollbackDialog(props: RollbackDialogProps) {
 							)}
 						</div>
 						{current.rw === null ? <NoAccess/> : (
-							<ValueView type={current.mime} value={current.data}/>
+							<ValueView type={current.mime} value={current.data} template={current.template}/>
 						)}
 					</DialogContentText>
 				)}
@@ -155,7 +161,7 @@ export default function RollbackDialog(props: RollbackDialogProps) {
 									<div className={classes.edit}><IconButton onClick={() => handleEdit(props)} size="large"><EditIcon/></IconButton></div>
 								)}
 							</div>
-							<ValueView type={props.type} value={props.value}/>
+							<ValueView type={props.type} value={props.value} template={props.template}/>
 						</React.Fragment>
 					)}
 				</DialogContentText>

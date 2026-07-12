@@ -11,6 +11,7 @@ export interface NullValueProps {
 export interface NonNullValueProps {
 	type: NonNullParamType;
 	value: string;
+	template?: boolean;
 }
 
 export interface EditNonnullValueProps extends NonNullValueProps {

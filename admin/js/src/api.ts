@@ -18,6 +18,7 @@ interface ParamFields {
 	path: string;
 	name: string;
 	mime: ParamType;
+	template: boolean;
 	data: string | null;
 	summary: string;
 	description: string;
@@ -60,7 +61,7 @@ export async function getParam(path: string, symlink?: 'resolve' | 'follow', dep
 }
 
 export async function postParam(path: string, modify: ParamModify) {
-	const { data, notification, symlink, ...rest } = modify;
+	const { data, notification, symlink, template, ...rest } = modify;
 	const params = new URLSearchParams(rest as Record<string, string>);
 	if (data !== undefined) {
 		params.append('data', data !== null ? data : '');
@@ -70,6 +71,11 @@ export async function postParam(path: string, modify: ParamModify) {
 	}
 	if (symlink) {
 		params.append('symlink', '1');
+	}
+	// tri-state on the server: an absent field preserves the stored flag, so
+	// the field is sent only when the caller states the intended value
+	if (template !== undefined) {
+		params.append('template', template ? '1' : '0');
 	}
 	const response = await axios.post<IParam>('/config' + encodePath(path), params, commonUrlencodedOptions);
 	return response.data;
@@ -122,6 +128,7 @@ export interface IParamLog {
 	path: string;
 	version: number;
 	mime: ParamType;
+	template: boolean;
 	data: string;
 	mtime: string;
 	author: string;
@@ -265,6 +272,8 @@ export async function getUsers(term: string) {
 
 export interface UIConfig {
 	avatar?: AvatarConfig;
+	template_flag: boolean;
+	template_vars: string[];
 }
 
 export interface AvatarConfig {

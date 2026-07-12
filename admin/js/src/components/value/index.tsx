@@ -34,9 +34,14 @@ const typeMap: { [P in NonNullParamType]: NonNullTypeConfig } = {
 };
 
 export function ValuePreview(props: ValueProps) {
-	const { type, value, ...rest } = props;
+	const { type, value, template, ...rest } = props;
 	if (type === 'application/x-null') {
 		return <NullValuePreview {...rest} type="application/x-null" value={null}/>;
+	} else if (template) {
+		// a flagged value previews like a template whatever its type:
+		// the placeholders are what distinguishes it at a glance
+		const Preview = templateValue.preview;
+		return <Preview {...rest} type={type} template value={value !== null ? value : ''}/>;
 	} else {
 		const Preview = typeMap[type].preview;
 		return <Preview {...rest} type={type} value={value !== null ? value : ''}/>;
@@ -57,14 +62,14 @@ interface ValueViewProps extends ValueProps {
 }
 
 export function ValueView(props: ValueViewProps) {
-	const { type, value, disableDecoration, className, ...rest } = props;
+	const { type, value, template, disableDecoration, className, ...rest } = props;
 	const classes = useViewStyles();
 	let view: JSX.Element;
 	if (type === 'application/x-null') {
 		view = <NullValueView type="application/x-null" value={null}/>;
 	} else {
 		const View = typeMap[type].view;
-		view = <View type={type} value={value !== null ? value : ''} />;
+		view = <View type={type} template={template} value={value !== null ? value : ''} />;
 	}
 	return (
 		<Typography
@@ -80,11 +85,11 @@ export function ValueView(props: ValueViewProps) {
 }
 
 export function ValueEdit(props: EditValueProps) {
-	const { type, value, ...rest } = props;
+	const { type, value, template, ...rest } = props;
 	if (type === 'application/x-null') {
 		return <NullValueEdit {...rest} type="application/x-null" value={null}/>;
 	} else {
 		const Edit = typeMap[type].edit;
-		return <Edit {...rest} type={type} value={value !== null ? value : ''}/>;
+		return <Edit {...rest} type={type} template={template} value={value !== null ? value : ''}/>;
 	}
 }

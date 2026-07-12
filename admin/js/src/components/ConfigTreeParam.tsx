@@ -123,7 +123,7 @@ function ConfigTreeParamPreview(props: ConfigTreeParamPreviewProps) {
 
 	return (
 		<Typography component="div" variant="body2" className={className}>
-			<ParamIcon type={param.mime} path={param.path} numChildren={param.num_children} className={classes.icon} color="action"/>
+			<ParamIcon type={param.mime} template={param.template} path={param.path} numChildren={param.num_children} className={classes.icon} color="action"/>
 			<div className={classes.name}>
 				{param.name}
 				{param.summary !== '' && <span className={classes.summary}>{param.summary}</span>}
@@ -132,7 +132,7 @@ function ConfigTreeParamPreview(props: ConfigTreeParamPreviewProps) {
 				<div className={classes.value}>
 					{param.rw === null ? <NoAccess/> : (
 						<span onMouseEnter={onValuePopoverOpen} onMouseLeave={onValuePopoverClose}>
-							<ValuePreview type={param.mime} value={param.data}/>
+							<ValuePreview type={param.mime} value={param.data} template={param.template}/>
 						</span>
 					)}
 				</div>

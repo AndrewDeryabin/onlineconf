@@ -14,11 +14,12 @@ import InputAdornment from '@mui/material/InputAdornment';
 import Typography from '@mui/material/Typography';
 import { useTheme, useMediaQuery } from '@mui/material';
 
-import { ValueProps } from './common';
+import { ValueProps, templateEligible } from './common';
 import { Notification, postParam, IParam, ParamModify } from '../api';
 import NotificationControl from './NotificationControl';
-import TypeValueFields from './TypeValueFields';
+import TypeValueFields, { TypeValueState } from './TypeValueFields';
 import SummaryDescriptionFields from './SummaryDescriptionFields';
+import { TemplateConfigContext } from './UIConfig';
 
 const styles = (theme: Theme) => createStyles({
 	paper: {
@@ -68,6 +69,9 @@ interface EditorState extends ValueProps {
 
 class Editor extends React.Component<EditorProps & WithStyles<typeof styles> & WithTranslation, EditorState> {
 
+	static contextType = TemplateConfigContext;
+	context!: React.ContextType<typeof TemplateConfigContext>;
+
 	constructor(props: EditorProps & WithStyles<typeof styles> & WithTranslation) {
 		super(props);
 		this.state = {
@@ -75,6 +79,7 @@ class Editor extends React.Component<EditorProps & WithStyles<typeof styles> & W
 			name: '',
 			type: props.type !== undefined ? props.type : 'application/x-null',
 			value: props.value !== undefined ? props.value : null,
+			template: props.template,
 			summary: props.summary !== undefined ? props.summary : '',
 			description: props.description !== undefined ? props.description : '',
 			notification: props.notification !== undefined ? null : undefined,
@@ -94,7 +99,7 @@ class Editor extends React.Component<EditorProps & WithStyles<typeof styles> & W
 		this.setState({ description });
 	};
 
-	handleTypeValueChange = (newState: Pick<EditorState, 'type' | 'value'>) => {
+	handleTypeValueChange = (newState: TypeValueState) => {
 		this.setState(newState);
 	};
 
@@ -135,6 +140,12 @@ class Editor extends React.Component<EditorProps & WithStyles<typeof styles> & W
 				...params,
 				mime: this.state.type,
 				data: this.state.value,
+				// stated explicitly for eligible types (the server preserves the
+				// stored flag when the field is absent); never sent while the
+				// feature is off — the server would refuse the request
+				template: this.context.enabled && templateEligible(this.state.type)
+					? this.state.template || false
+					: undefined,
 				comment: this.state.comment,
 			});
 			onChange(param);
@@ -191,7 +202,7 @@ class Editor extends React.Component<EditorProps & WithStyles<typeof styles> & W
 					) : this.props.description !== '' &&
 						<Typography paragraph variant="body2">{this.props.description}</Typography>
 					}
-					<TypeValueFields type={this.state.type} value={this.state.value} onChange={this.handleTypeValueChange} onError={this.props.onError} />
+					<TypeValueFields type={this.state.type} value={this.state.value} template={this.state.template} onChange={this.handleTypeValueChange} onError={this.props.onError} />
 					{this.state.notification !== undefined && (
 						<NotificationControl
 							compact

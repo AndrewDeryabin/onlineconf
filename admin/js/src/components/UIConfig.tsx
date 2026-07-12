@@ -3,6 +3,7 @@ import { ThemeProvider, Theme, StyledEngineProvider, adaptV4Theme } from '@mui/m
 import useMediaQuery from '@mui/material/useMediaQuery';
 
 import { UIConfig, AvatarConfig, getUIConfig } from '../api';
+import { setTemplateVars } from '../template';
 import createTheme from '../theme';
 
 
@@ -13,6 +14,15 @@ declare module '@mui/styles/defaultTheme' {
 
 
 export const AvatarContext = React.createContext<AvatarConfig | undefined>(undefined);
+
+export interface TemplateConfig {
+	enabled: boolean;
+	vars: string[];
+}
+
+// Off until /ui-config arrives: the toggle must not show on an installation
+// that has opted the feature out.
+export const TemplateConfigContext = React.createContext<TemplateConfig>({ enabled: false, vars: [] });
 
 export type PaletteType = 'system' | 'light' | 'dark';
 
@@ -28,9 +38,21 @@ export default function UIConfigProvider(props: UIConfigProviderProps) {
 
 	React.useEffect(() => {
 		getUIConfig()
-			.then(data => setConfig(data))
+			.then(data => {
+				setConfig(data);
+				if (data.template_vars) {
+					// feed the CodeMirror overlay's classification, which lives
+					// outside the React tree
+					setTemplateVars(data.template_vars);
+				}
+			})
 			.catch(error => onError(error));
 	}, [onError]);
+
+	const templateConfig = React.useMemo<TemplateConfig>(() => ({
+		enabled: config?.template_flag ?? false,
+		vars: config?.template_vars ?? [],
+	}), [config]);
 
 	const systemPaletteType = useMediaQuery('(prefers-color-scheme: dark)') ? 'dark' : 'light';
 	const themePaletteType = props.paletteType === 'system' ? systemPaletteType : props.paletteType;
@@ -44,7 +66,9 @@ export default function UIConfigProvider(props: UIConfigProviderProps) {
 		<StyledEngineProvider injectFirst>
 			<ThemeProvider theme={theme}>
 				<AvatarContext.Provider value={config?.avatar}>
-					{props.children}
+					<TemplateConfigContext.Provider value={templateConfig}>
+						{props.children}
+					</TemplateConfigContext.Provider>
 				</AvatarContext.Provider>
 			</ThemeProvider>
 		</StyledEngineProvider>

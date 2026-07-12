@@ -33,7 +33,7 @@ const ValuePopover = (props: ValuePopoverProps & WithStyles<typeof styles>) => (
 		classes={{ paper: props.classes.paper }}
 		disableRestoreFocus
 	>
-		<ValueView type={props.type} value={props.value} disableDecoration/>
+		<ValueView type={props.type} value={props.value} template={props.template} disableDecoration/>
 	</Popover>
 );
 

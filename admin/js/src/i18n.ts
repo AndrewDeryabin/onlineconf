@@ -56,6 +56,10 @@ const resources = {
 					shortHostname: 'short hostname',
 					ip: 'host IP address',
 					param: 'value of parameter',
+					flag: 'Template',
+					clientVar: 'not expanded on the server: substituted by onlineconf-updater from its "variables" configuration, or replaced with an empty string where undefined',
+					typedClientVars: 'with such variables the value is delivered as an untyped template: the declared type is lost until every placeholder expands on the server',
+					missingPath: 'parameter does not exist (yet) and expands to an empty string',
 				},
 				case: {
 					by: 'Case by',
@@ -164,6 +168,10 @@ const resources = {
 					shortHostname: 'сокращенное имя хоста',
 					ip: 'IP-адрес, соответствующий хосту',
 					param: 'значение параметра',
+					flag: 'Шаблон',
+					clientVar: 'не раскрывается на сервере: подставляется onlineconf-updater из его секции "variables" либо заменяется пустой строкой, если там не определена',
+					typedClientVars: 'с такими переменными значение доставляется как нетипизированный шаблон: заявленный тип теряется, пока все подстановки не раскрываются на сервере',
+					missingPath: 'параметр (пока) не существует и раскрывается в пустую строку',
 				},
 				case: {
 					by: 'Case по',

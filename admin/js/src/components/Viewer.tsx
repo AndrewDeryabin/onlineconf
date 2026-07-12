@@ -48,7 +48,7 @@ const Viewer = ({ param, classes, t, ...props }: ViewerProps & WithStyles<typeof
 		<DialogContent>
 			{param.description !== '' && <Typography paragraph variant="body2">{param.description}</Typography>}
 			{param.rw === null ? <NoAccess/> : (
-				<ValueView type={param.mime} value={param.data}/>
+				<ValueView type={param.mime} value={param.data} template={param.template}/>
 			)}
 			<div className={classes.versionBox}>
 				<Typography variant="body2" className={classes.version}>v.{param.version}</Typography>
