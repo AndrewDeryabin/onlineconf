@@ -32,12 +32,12 @@ import (
 // converges to zero conversions. Dependency edges are not touched: both
 // encodings of the same value produce identical edge sets by design.
 func ConvertTemplateTypes(ctx context.Context, reverse, force bool) error {
-	optedOut, err := templateFlagOptedOut(ctx)
+	enabled, err := templateFlagEnabledDirect(ctx)
 	if err != nil {
 		return err
 	}
-	if optedOut {
-		return fmt.Errorf("the template flag is opted out (%s); lift the opt-out after the whole fleet runs a flag-aware binary", templateFlagPath)
+	if !enabled {
+		return fmt.Errorf("the template flag is not enabled; set %s = 1 after the whole fleet runs a flag-aware binary, then convert", templateFlagPath)
 	}
 
 	release, err := acquireAdvisoryLock(ctx, "template-convert", depsRebuildLockWait)
@@ -81,13 +81,13 @@ func ConvertTemplateTypes(ctx context.Context, reverse, force bool) error {
 const convertComment = "template content type converted to the template flag"
 const convertReverseComment = "template flag converted back to the template content type"
 
-// templateFlagOptedOut reads the opt-out parameter directly, bypassing the
+// templateFlagEnabledDirect reads the flag parameter directly, bypassing the
 // ACL-filtered SelectParameter: the tool runs with no authenticated user, and
-// the access function would blank the value, silently passing the check.
+// the access function would blank the value, making the check see garbage.
 // Unlike the request-path isTemplateFlagEnabled it does not follow symlinks:
-// the opt-out is created as a plain parameter, and an aliased one is not
-// worth the extra resolution machinery here.
-func templateFlagOptedOut(ctx context.Context) (bool, error) {
+// the flag is created as a plain parameter (seeded so by schema.sql), and an
+// aliased one is not worth the extra resolution machinery here.
+func templateFlagEnabledDirect(ctx context.Context) (bool, error) {
 	row := DB.QueryRowContext(ctx,
 		"SELECT ContentType, Templated, Value FROM my_config_tree WHERE Path = ? AND NOT Deleted", templateFlagPath)
 	var contentType string
@@ -95,14 +95,14 @@ func templateFlagOptedOut(ctx context.Context) (bool, error) {
 	var value sql.NullString
 	err := row.Scan(&contentType, &templated, &value)
 	if err == sql.ErrNoRows {
-		return false, nil // absent means enabled
+		return false, nil // absent means off
 	} else if err != nil {
 		return false, err
 	}
 	if contentType != "text/plain" || templated || !value.Valid {
-		return false, nil // not a usable opt-out value: treated as absent
+		return false, nil // not a usable flag value: treated as absent
 	}
-	return value.String == "" || value.String == "0", nil
+	return value.String != "" && value.String != "0", nil
 }
 
 // scanReverseDemotions lists the live parameters whose reverse conversion is

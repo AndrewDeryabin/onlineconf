@@ -103,11 +103,12 @@ func TestTemplateFlagCRUD(t *testing.T) {
 	}
 }
 
-// TestTemplateFlagGated checks the opt-out switch: a fresh stack is enabled by
-// default (absent parameter), creating /onlineconf/template-flag = 0 refuses
-// template-carrying writes and hides the feature from /ui-config, and lifting
-// the opt-out restores it. Also asserts /ui-config advertises the predefined
-// template variables.
+// TestTemplateFlagGated checks the feature switch: a fresh stack is enabled
+// because /onlineconf/template-flag is seeded with "1" (schema.sql and the
+// example dumps), the value "0" and the parameter's absence both refuse
+// template-carrying writes and hide the feature from /ui-config — an
+// upgraded installation that never created the parameter stays safely off.
+// Also asserts /ui-config advertises the predefined template variables.
 func TestTemplateFlagGated(t *testing.T) {
 	const flagParam = "/onlineconf/template-flag"
 
@@ -123,8 +124,11 @@ func TestTemplateFlagGated(t *testing.T) {
 		return cfg.TemplateFlag, cfg.TemplateVars
 	}
 
+	if p := getParamInfo(t, flagParam); p.Data != "1" {
+		t.Fatalf("a fresh stack must carry the seeded %s = 1, got %q", flagParam, p.Data)
+	}
 	if enabled, vars := uiConfig(); !enabled {
-		t.Fatal("a fresh stack must have the template flag enabled (absent parameter = on)")
+		t.Fatal("a fresh stack must have the template flag enabled (seeded parameter)")
 	} else {
 		want := []string{"hostname", "hostname -s", "short_hostname", "hostname -i", "ip"}
 		if fmt.Sprint(vars) != fmt.Sprint(want) {
@@ -132,31 +136,39 @@ func TestTemplateFlagGated(t *testing.T) {
 		}
 	}
 
-	// opt out and verify the gate
-	ensureParam(t, flagParam, "text/plain", "0", "opt out")
-	defer deleteParam(t, flagParam, "lift the opt-out")
+	requireGated := func(when string) {
+		t.Helper()
+		if enabled, _ := uiConfig(); enabled {
+			t.Errorf("%s: ui-config still reports the feature on", when)
+		}
+		status, body := adminReq(t, "POST", "/config"+uniqPath("tf-gated"), url.Values{
+			"mime": {"text/plain"}, "template": {"1"}, "data": {"v"}, "comment": {"gated"},
+		})
+		if status != http.StatusBadRequest || !strings.Contains(string(body), "TemplateFlagDisabled") {
+			t.Fatalf("%s: write with the field: status %d body %s, want 400 TemplateFlagDisabled", when, status, body)
+		}
+		// even template=0 is refused: the client must not run ahead of the
+		// operator
+		status, body = adminReq(t, "POST", "/config"+uniqPath("tf-gated0"), url.Values{
+			"mime": {"text/plain"}, "template": {"0"}, "data": {"v"}, "comment": {"gated"},
+		})
+		if status != http.StatusBadRequest || !strings.Contains(string(body), "TemplateFlagDisabled") {
+			t.Fatalf("%s: write with template=0: status %d body %s, want 400 TemplateFlagDisabled", when, status, body)
+		}
+	}
 
-	if enabled, _ := uiConfig(); enabled {
-		t.Error("ui-config still reports the feature on while opted out")
-	}
-	status, body := adminReq(t, "POST", "/config"+uniqPath("tf-gated"), url.Values{
-		"mime": {"text/plain"}, "template": {"1"}, "data": {"v"}, "comment": {"gated"},
-	})
-	if status != http.StatusBadRequest || !strings.Contains(string(body), "TemplateFlagDisabled") {
-		t.Fatalf("write with the field while opted out: status %d body %s, want 400 TemplateFlagDisabled", status, body)
-	}
-	// even template=0 is refused: the client must not run ahead of the operator
-	status, body = adminReq(t, "POST", "/config"+uniqPath("tf-gated0"), url.Values{
-		"mime": {"text/plain"}, "template": {"0"}, "data": {"v"}, "comment": {"gated"},
-	})
-	if status != http.StatusBadRequest || !strings.Contains(string(body), "TemplateFlagDisabled") {
-		t.Fatalf("write with template=0 while opted out: status %d body %s, want 400 TemplateFlagDisabled", status, body)
-	}
+	editParam(t, flagParam, "text/plain", "0", "disable the feature")
+	requireGated("value 0")
 
-	// lift the opt-out by value
-	editParam(t, flagParam, "text/plain", "1", "lift the opt-out")
+	// absent must mean OFF: an upgraded installation without the parameter
+	// must not have the feature silently on
+	deleteParam(t, flagParam, "drop the flag parameter")
+	requireGated("absent parameter")
+
+	// restore the seeded state
+	mkParam(t, flagParam, "text/plain", "1", "enable the feature")
 	if enabled, _ := uiConfig(); !enabled {
-		t.Error("ui-config still reports the feature off after lifting the opt-out")
+		t.Error("ui-config still reports the feature off after enabling")
 	}
 }
 
@@ -384,13 +396,13 @@ func TestConvertTemplateTypes(t *testing.T) {
 		return out
 	}
 
-	// while opted out the tool refuses to run — converting rows old binaries
-	// may still read would corrupt what they serve
-	ensureParam(t, "/onlineconf/template-flag", "text/plain", "0", "opt out")
+	// while the flag is not enabled the tool refuses to run — converting
+	// rows old binaries may still read would corrupt what they serve
+	editParam(t, "/onlineconf/template-flag", "text/plain", "0", "disable the feature")
 	if _, err := composeStdout("exec", "-T", "onlineconf-admin", "onlineconf-admin", "-convert-template-types"); err == nil {
-		t.Fatal("the conversion ran despite the opt-out")
+		t.Fatal("the conversion ran despite the feature being disabled")
 	}
-	deleteParam(t, "/onlineconf/template-flag", "lift the opt-out")
+	editParam(t, "/onlineconf/template-flag", "text/plain", "1", "re-enable the feature")
 
 	convert()
 

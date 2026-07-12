@@ -241,11 +241,17 @@ END;$$
 
 delimiter ;
 
-INSERT INTO `my_config_tree` (`ID`, `Name`, `ParentID`, `Notification`) VALUES
-    (1, '', NULL, 'none'),
-    (2, 'onlineconf', 1, NULL),
-    (3, 'module', 2, NULL),
-    (4, 'service', 2, NULL);
+-- /onlineconf/template-flag is seeded enabled: a fresh installation gets
+-- templated parameters out of the box. On upgraded installations the
+-- parameter does not exist and the feature stays off (safe even when only
+-- the schema migration was applied) until the operator creates it with "1"
+-- after the whole fleet runs a flag-aware version.
+INSERT INTO `my_config_tree` (`ID`, `Name`, `ParentID`, `Value`, `ContentType`, `Notification`) VALUES
+    (1, '', NULL, NULL, 'application/x-null', 'none'),
+    (2, 'onlineconf', 1, NULL, 'application/x-null', NULL),
+    (3, 'module', 2, NULL, 'application/x-null', NULL),
+    (4, 'service', 2, NULL, 'application/x-null', NULL),
+    (5, 'template-flag', 2, '1', 'text/plain', NULL);
 
 INSERT INTO `my_config_tree_log` (`NodeID`, `Path`, `Version`, `Value`, `ContentType`, `Templated`, `Author`, `MTime`, `Comment`, `Deleted`)
 SELECT `ID`, `Path`, `Version`, `Value`, `ContentType`, `Templated`, 'onlineconf', `MTime`, 'Init onlineconf', `Deleted` FROM `my_config_tree` ORDER BY `ID`;

@@ -62,7 +62,7 @@ published on the host.
 | `TestBackfillProtectsExampleData` | The startup backfill populates dependency edges for a pre-existing database. |
 | `TestDisableFlagSkipsCheck` | The `disable-deleted-key-symlinks-check` flag still bypasses the check. |
 | `TestTemplateFlagCRUD` | The template flag is stored and reported, preserved by writes that do not mention it, cleared by `template=0`, logged per version and refused on ineligible types. |
-| `TestTemplateFlagGated` | A fresh stack has the feature on (absent parameter = enabled); `/onlineconf/template-flag = 0` refuses `template`-carrying writes and flips `/ui-config`, which also advertises the resolver's template variables. |
+| `TestTemplateFlagGated` | A fresh stack is enabled through the seeded `/onlineconf/template-flag = 1`; both the value `0` and the parameter's absence (an upgraded installation) refuse `template`-carrying writes and flip `/ui-config`, which also advertises the resolver's template variables. |
 | `TestTypedTemplateDelivery` | A flagged `application/json` parameter reaches `/client/config` typed and substituted; one with a non-server variable is delivered as `application/x-template` for updater-side substitution. |
 | `TestFlaggedReferrerBlocksDelete` | Flagged parameters protect their `${/path}` targets like legacy templates: node-level, from a case branch, and through a symlink hop. |
 | `TestFlaggedReferrerHealed` | A flagged parameter written before its target exists protects the target the moment it is created. |

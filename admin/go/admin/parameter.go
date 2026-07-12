@@ -811,11 +811,13 @@ func isPlainText(param *Parameter) bool {
 const templateFlagPath = "/onlineconf/template-flag"
 
 // isTemplateFlagEnabled reports whether templated parameters may be written.
-// The parameter is an opt-out, absent means enabled: a fresh installation
-// gets the feature with no setup, while an existing installation creates the
-// parameter with "0" before upgrading its fleet (a flagged row read by an
-// old binary is served as literal text) and lifts the opt-out once every
-// instance runs a binary that understands the flag.
+// Absent means OFF: fresh installations are born enabled because schema.sql
+// (and the example seeds) insert the parameter with "1", while an upgraded
+// installation — where the parameter does not exist — stays safely off even
+// when the operator applied only the schema migration without reading the
+// release notes. A flagged row read by an old binary is served as literal
+// text, so the operator enables the feature explicitly, once every instance
+// runs a binary that understands the flag.
 func isTemplateFlagEnabled(ctx context.Context) (bool, error) {
 	param, err := SelectParameterResolvingSymlink(ctx, templateFlagPath)
 	if err != nil {
@@ -823,7 +825,7 @@ func isTemplateFlagEnabled(ctx context.Context) (bool, error) {
 	}
 
 	if !isPlainText(param) {
-		return true, nil
+		return false, nil
 	}
 
 	return param.Value.String != "" && param.Value.String != "0", nil

@@ -181,3 +181,9 @@ INSERT INTO `my_config_user_group` VALUES ('hedgehog',2);
 INSERT INTO `my_config_user_group` VALUES ('meerkat',3);
 INSERT INTO `my_config_user_group` VALUES ('rabbit',4);
 INSERT INTO `my_config_user_group` VALUES ('beaver',5);
+
+-- Fresh demo installations get templated parameters out of the box; see the
+-- matching seed in schema.sql (this dump wipes and replaces the tree).
+INSERT INTO `my_config_tree` (`ID`, `Name`, `ParentID`, `Value`, `ContentType`) VALUES (67,'template-flag',2,'1','text/plain');
+INSERT INTO `my_config_tree_log` (`NodeID`, `Path`, `Version`, `Value`, `ContentType`, `Templated`, `Author`, `MTime`, `Comment`, `Deleted`)
+SELECT `ID`, `Path`, `Version`, `Value`, `ContentType`, `Templated`, 'onlineconf', `MTime`, 'Enable the template flag', `Deleted` FROM `my_config_tree` WHERE `Path` = '/onlineconf/template-flag';

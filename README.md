@@ -109,14 +109,17 @@ parameter keeps its declared type — a templated JSON is delivered to
 applications as JSON once every placeholder is expanded (values with
 updater-side variables are delivered as untyped text and finished on the
 host). The flag is written by the admin UI/API when
-`/onlineconf/template-flag` allows it: the switch is an opt-out — a missing
-parameter means the feature is on, which is the default for fresh
-installations. Existing installations must create it with the value `0`
-**before** upgrading (an old server serves flagged values as literal text)
-and set it to `1` once every instance runs a new version; stored parameters
-of the legacy *Template* type are then rewritten to the flag form by the
-one-shot `onlineconf-admin -convert-template-types` command. The legacy
-type keeps working (and stays rendered in the change history) until then.
+`/onlineconf/template-flag` allows it. Fresh installations get that
+parameter seeded with `1` and have the feature out of the box; on an
+upgraded installation the parameter does not exist and the feature stays
+**off** — applying the schema migration alone changes nothing, so an
+upgrade performed without reading the release notes is safe. Create the
+parameter with the value `1` once every instance runs a new version (an
+old server would serve flagged values as literal text); stored parameters
+of the legacy *Template* type can then be rewritten to the flag form by
+the one-shot `onlineconf-admin -convert-template-types` command. The
+legacy type keeps working (and stays rendered in the change history) until
+then.
 
 ## Authentication
 

@@ -5,7 +5,10 @@ package admin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+
+	"github.com/go-sql-driver/mysql"
 
 	. "github.com/onlineconf/onlineconf/admin/go/common"
 )
@@ -97,6 +100,21 @@ func TestValidateParameterTemplateFlag(t *testing.T) {
 		case errors.Is(tt.wantErr, ErrTemplateFlagNotAllowed) && !errors.Is(err, ErrTemplateFlagNotAllowed):
 			t.Errorf("%s: got %v, want ErrTemplateFlagNotAllowed", tt.name, err)
 		}
+	}
+}
+
+func TestIsUnknownColumn(t *testing.T) {
+	if !isUnknownColumn(&mysql.MySQLError{Number: 1054, Message: "Unknown column 'Templated' in 'field list'"}) {
+		t.Error("error 1054 must be recognized")
+	}
+	if !isUnknownColumn(fmt.Errorf("scan: %w", &mysql.MySQLError{Number: 1054})) {
+		t.Error("a wrapped 1054 must be recognized")
+	}
+	if isUnknownColumn(&mysql.MySQLError{Number: 1146}) {
+		t.Error("other mysql errors must not match")
+	}
+	if isUnknownColumn(errors.New("connection refused")) {
+		t.Error("non-mysql errors must not match")
 	}
 }
 
