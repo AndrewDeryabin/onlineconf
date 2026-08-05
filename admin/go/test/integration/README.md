@@ -70,3 +70,4 @@ published on the host.
 | `TestConvertTemplateTypes` | `onlineconf-admin -convert-template-types` rewrites legacy templates (node values and nested case branches) with Silent log rows, unchanged dependency edges and idempotent re-runs. |
 | `TestLogRestorePreservesFlag` | Restoring a historical version restores its flag; a legacy `application/x-template` version still restores. |
 | `TestResurrectClearsFlag` | Re-creating a soft-deleted path does not inherit the zombie's template flag. |
+| `TestCaseServiceSlashNames` | Case resolution with slash-separated service names: a `service:*/rc` group glob crosses slashes, an exact `service` branch matches only the full name, and the slash-prefix ladder matches `service: <base>` branches for every account under the base. |
