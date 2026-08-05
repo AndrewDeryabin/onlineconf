@@ -153,6 +153,7 @@ func (node *Param) deepClone() *Param {
 type tree struct {
 	root         *Param
 	mtime        string
+	lastLogID    int64
 	rw           sync.RWMutex
 	ephemeralIPs []net.IPNet
 	datacenters  []datacenter
@@ -162,12 +163,24 @@ type tree struct {
 	syncMutex    sync.Mutex
 }
 
-func getTreeMTime(ctx context.Context) (string, error) {
-	query := "SELECT max(MTime) FROM my_config_tree_log"
+func getTreeVersion(ctx context.Context) (mtime string, lastLogID int64, err error) {
+	query := "SELECT max(MTime), max(ID) FROM my_config_tree_log"
 	row := DB.QueryRowContext(ctx, query)
-	var mtime string
-	err := row.Scan(&mtime)
-	return mtime, err
+	err = row.Scan(&mtime, &lastLogID)
+	return
+}
+
+// treeLogAdvanced reports whether the change log moved past the loaded
+// snapshot. MTime alone is not enough: it has one-second granularity, so a
+// write committed in the same second as the previous reload — after that
+// reload's SELECT — never makes max(MTime) strictly greater, and a quiet
+// installation would keep serving the stale tree until the next unrelated
+// write, indefinitely. The max log ID breaks the tie within the second.
+func treeLogAdvanced(loadedMTime string, loadedID int64, mtime string, id int64) bool {
+	if mtime != loadedMTime {
+		return mtime > loadedMTime
+	}
+	return id > loadedID
 }
 
 func selectTree(ctx context.Context) (*Param, error) {
@@ -217,14 +230,14 @@ func selectTree(ctx context.Context) (*Param, error) {
 }
 
 func (t *tree) update(ctx context.Context) error {
-	isReadyToUpdate, mtime, err := t.readyToUpdate(ctx)
+	isReadyToUpdate, mtime, lastLogID, err := t.readyToUpdate(ctx)
 	if err != nil {
 		return err
 	}
 	if !isReadyToUpdate {
 		return nil
 	}
-	log.Ctx(ctx).Info().Str("mtime", mtime).Msg("updating graph")
+	log.Ctx(ctx).Info().Str("mtime", mtime).Int64("log_id", lastLogID).Msg("updating graph")
 
 	var root *Param
 	var ephemeralIPs []net.IPNet
@@ -264,16 +277,17 @@ func (t *tree) update(ctx context.Context) error {
 	t.groups = groups
 	t.services = services
 	t.mtime = mtime
+	t.lastLogID = lastLogID
 	t.rw.Unlock()
 	return nil
 }
 
-func (t *tree) readyToUpdate(ctx context.Context) (res bool, mtime string, err error) {
-	if mtime, err = getTreeMTime(ctx); err != nil {
-		return false, mtime, err
+func (t *tree) readyToUpdate(ctx context.Context) (res bool, mtime string, lastLogID int64, err error) {
+	if mtime, lastLogID, err = getTreeVersion(ctx); err != nil {
+		return false, mtime, lastLogID, err
 	}
 	t.rw.RLock()
-	res = mtime > t.mtime
+	res = treeLogAdvanced(t.mtime, t.lastLogID, mtime, lastLogID)
 	t.rw.RUnlock()
 	return
 }
