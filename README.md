@@ -121,6 +121,51 @@ the one-shot `onlineconf-admin -convert-template-types` command. The
 legacy type keeps working (and stays rendered in the change history) until
 then.
 
+### Case resolution order
+
+Within a single Case value the branches are checked in a fixed order and
+the first match wins:
+
+1. `server` — hostname globs, most specific first (more literal
+   characters, then fewer wildcard constructs, then the longer glob, then
+   alphabetically);
+2. `group`, by *host* membership — the groups the hostname belongs to, in
+   group-priority order;
+3. `datacenter` — the client's datacenter (a trusted header or derived
+   from the configured IP ranges);
+4. `service` — the authenticated account name or any of its
+   slash-prefixes, longest first (`a/b/c` tries `a/b/c`, `a/b`, `a`);
+5. `group` again, by *service* membership — groups whose globs match
+   `service:<name>`; note this pass runs after `datacenter` and `service`,
+   unlike the host pass;
+6. the default branch (the one without a condition);
+7. nothing matched and no default — the parameter resolves to null, as if
+   absent.
+
+Group order for passes 2 and 5: the names listed in
+`/onlineconf/group/priority` first (a `*` entry splices in all the
+remaining ones), then groups whose globs form a strict subset of another
+group's are moved ahead of the broader group, remaining ties are
+alphabetical.
+
+Nested Cases add no extra rules: the selected branch's value is resolved
+with the same client context, level by level. Selection is committed top
+down — a condition inside a nested Case can never influence which branch
+an outer Case picks — and if an inner Case matches nothing and has no
+default, the parameter resolves to null: the outer default is *not*
+revisited.
+
+What the conditions actually see: `group` describes the **host**, while
+`service` describes the **authenticated account** — they filter different
+subjects. A client whose IP falls into an `/onlineconf/ephemeral-ip` range
+has no hostname at all, so `server` branches and host-based group
+membership never match for it; give such groups `service:...` globs
+instead. A hostname claimed by the updater is accepted only when it
+resolves back to the client's IP. And the glob dialects differ: in
+`server` branches `*` effectively crosses the dots of an FQDN, while group
+definitions match dot-separated (`*` is a single label, `**` crosses
+labels).
+
 ## Authentication
 
 Right now two authentication methods are supported:
