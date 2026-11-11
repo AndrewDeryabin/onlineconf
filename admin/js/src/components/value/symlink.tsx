@@ -21,8 +21,10 @@ const SymlinkValueView = (props: NonNullValueProps & WithStyles<typeof viewStyle
 
 const SymlinkValueEdit = (props: EditNonnullValueProps) => {
 	const { t } = useTranslation();
+	// a symlink is never encrypted; keep the value flags off the DOM
+	const { encrypted, masked, ...rest } = props;
 	return (
-		<PathField {...props} label={t('param.value')} symlink="resolve" fullWidth variant="outlined" margin="dense"/>
+		<PathField {...rest} label={t('param.value')} symlink="resolve" fullWidth variant="outlined" margin="dense"/>
 	);
 };
 

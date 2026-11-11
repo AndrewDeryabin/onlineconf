@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"sort"
 	"strings"
@@ -28,6 +29,7 @@ type Param struct {
 	MTime        string
 	Version      int
 	ContentType  string
+	Encrypted    bool // holds (or, after resolution, carries) a secret: never log its value
 	Value        NullString
 	Children     map[string]**Param
 	common       bool
@@ -71,6 +73,14 @@ func (node *Param) GetStruct(ptr interface{}) error {
 	default: // ignore any other type
 		return nil
 	}
+}
+
+// logValue is what a log statement may print of a parameter's value.
+func (node *Param) logValue() string {
+	if node.Encrypted {
+		return "<encrypted>"
+	}
+	return node.Value.String
 }
 
 func (node *Param) deepMarkCommon(ctx context.Context) {
@@ -168,7 +178,7 @@ func getTreeMTime(ctx context.Context) (string, error) {
 
 func selectTree(ctx context.Context) (*Param, error) {
 	query := `
-		SELECT ID, Name, Path, MTime, Version, ContentType, Value, ParentID
+		SELECT ID, Name, Path, MTime, Version, ContentType, Encrypted, Value, ParentID
 		FROM my_config_tree
 		WHERE NOT Deleted
 		ORDER BY Path
@@ -184,10 +194,19 @@ func selectTree(ctx context.Context) (*Param, error) {
 		param := Param{}
 		param.Children = make(map[string]**Param)
 		var parentID sql.NullInt64
-		err = rows.Scan(&param.ID, &param.Name, &param.Path, &param.MTime, &param.Version, &param.ContentType, &param.Value, &parentID)
+		err = rows.Scan(&param.ID, &param.Name, &param.Path, &param.MTime, &param.Version, &param.ContentType, &param.Encrypted, &param.Value, &parentID)
 		if err != nil {
 			return nil, err
 		}
+		// the resolver works on plaintext: decrypt at load, and fail closed
+		// on a value the keyring cannot open (the caller keeps the last good
+		// tree, or refuses to start)
+		param.Value, err = DecryptStoredValue(param.ContentType, param.Encrypted, param.Value)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", param.Path, err)
+		}
+		// a case with an encrypted branch is as secret as its branches
+		param.Encrypted = HasEncryptedValue(param.ContentType, param.Encrypted, param.Value)
 		paramByID[param.ID] = &param
 		if parentID.Valid {
 			parent, ok := paramByID[int(parentID.Int64)]

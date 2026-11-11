@@ -14,6 +14,17 @@ declare module '@mui/styles/defaultTheme' {
 
 export const AvatarContext = React.createContext<AvatarConfig | undefined>(undefined);
 
+export interface Features {
+	// encrypted writes are accepted: the Encrypted switch is offered
+	encryption: boolean;
+	// who may reveal encrypted values
+	encryptionReveal: 'rw' | 'ro';
+}
+
+// Off until /ui-config arrives: the switch must not show on an installation
+// that has the feature off.
+export const FeaturesContext = React.createContext<Features>({ encryption: false, encryptionReveal: 'rw' });
+
 export type PaletteType = 'system' | 'light' | 'dark';
 
 interface UIConfigProviderProps {
@@ -32,6 +43,11 @@ export default function UIConfigProvider(props: UIConfigProviderProps) {
 			.catch(error => onError(error));
 	}, [onError]);
 
+	const features = React.useMemo<Features>(() => ({
+		encryption: config?.encryption ?? false,
+		encryptionReveal: config?.encryption_reveal ?? 'rw',
+	}), [config]);
+
 	const systemPaletteType = useMediaQuery('(prefers-color-scheme: dark)') ? 'dark' : 'light';
 	const themePaletteType = props.paletteType === 'system' ? systemPaletteType : props.paletteType;
 	const theme = React.useMemo(() => createTheme(adaptV4Theme({
@@ -44,7 +60,9 @@ export default function UIConfigProvider(props: UIConfigProviderProps) {
 		<StyledEngineProvider injectFirst>
 			<ThemeProvider theme={theme}>
 				<AvatarContext.Provider value={config?.avatar}>
-					{props.children}
+					<FeaturesContext.Provider value={features}>
+						{props.children}
+					</FeaturesContext.Provider>
 				</AvatarContext.Provider>
 			</ThemeProvider>
 		</StyledEngineProvider>

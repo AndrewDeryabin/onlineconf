@@ -14,6 +14,8 @@ export interface NonNullValueProps {
 }
 
 export interface EditNonnullValueProps extends NonNullValueProps {
+	encrypted?: boolean;
+	masked?: boolean;
 	onChange: (value: string) => void;
 	onError: (error: unknown) => void;
 }

@@ -5,11 +5,30 @@ import { DistributiveOmit } from '@mui/types';
 export interface ValueProps {
 	type: ParamType;
 	value: string | null;
+	// stored encrypted: a null value is a masked secret, not an empty one
+	encrypted?: boolean;
 }
 
 export interface EditValueProps extends ValueProps {
+	// hide what is typed (password-style), for secrets
+	masked?: boolean;
 	onChange: (value: string | null) => void;
 	onError: (error: unknown) => void;
+}
+
+// Types whose values may be stored encrypted: everything except the special
+// types whose value is not free content (null has none; a symlink target and
+// a case structure must stay readable — case branches carry their own flag).
+// Must match EncryptionEligible in the backend (admin/go/common/storage.go).
+export function encryptionEligible(type: ParamType): boolean {
+	switch (type) {
+		case 'application/x-null':
+		case 'application/x-symlink':
+		case 'application/x-case':
+			return false;
+		default:
+			return true;
+	}
 }
 
 export interface IParamNode extends DistributiveOmit<IParam, 'children'> {

@@ -98,6 +98,73 @@ The daemon is written in Go, has no dependencies and easily deployed on any syst
 * Case - a conditional value, works as the switch operator;
 * Various types of lists: a simple comma-separated list, *ip:port* pairs separated by a comma and *ip:ports* pairs separated by a semicolon (where ports are separated by a comma).
 
+### Encrypted values
+
+A value of any type except Null, Symlink and Case can be marked **Encrypted**
+(a Case cannot, but each of its branches can, nested Cases included). Such a
+value is stored in the database as an AES-256-GCM envelope written by
+`onlineconf-admin` with a key from its key file, and so is every version of
+it in the change history: the moment a parameter becomes encrypted its older
+versions are sealed as well. Database dumps, backups, replicas and database
+accounts never see the plaintext, and neither do the admin's side channels:
+value search skips encrypted values, change notifications and the bot feed
+show a lock instead of the value, server logs print `<encrypted>`.
+
+Encryption is at rest only. Managed servers keep receiving plaintext from
+`/client/config` exactly as before (over TLS, which is mandatory in
+production), and the resolver decrypts the whole tree in memory. It does
+not protect against a compromised admin host, against users the reveal
+policy admits, or against copies of the database taken before a value was
+encrypted.
+
+**Reading a secret is an explicit, audited act.** The UI and the API serve
+an encrypted value as `null` in every listing; the plaintext is returned
+only by `GET /config/<path>?reveal=view|edit` (and the parameter's history by
+`GET /log/<path>?reveal=1`), subject to the reveal policy (see
+`/onlineconf/value-encryption/reveal` below), and every such request is
+recorded in `my_config_tree_reveal` and announced to the parameter's owners
+through the bot (`GET /botapi/reveal/`, scope `reveals`) and the legacy
+notification table. Writing an encrypted parameter requires stating the
+`encrypted` form field (`1` or `0`) explicitly: a client that does not know
+about encryption is refused rather than allowed to overwrite the secret
+with the `null` it was served. Rolling a parameter back to a historical
+version is done server-side (`POST /config/<path>` with `version` and
+`restore=<version>`) and never downgrades encryption.
+
+**Configuration.** The key file is a text file with one
+`<key-id> <base64 of 32 random bytes>` per line (`#` comments allowed); the
+first key is the active one, the others are retired keys kept for
+decryption. Generate a key with `head -c 32 /dev/urandom | base64`, keep the
+file readable by the service user only, and point the admin to it:
+
+```yaml
+encryption:
+  key_file: /usr/local/etc/onlineconf-admin.keys
+```
+
+or set the `ONLINECONF_ENCRYPTION_KEY_FILE` environment variable (the
+Docker image maps it to the same setting). The startup log always states
+the outcome: `encryption keyring loaded` with the active key id, or `value
+encryption is not configured` — a key file that merely exists at
+`/usr/local/etc/onlineconf-admin.keys` is reported but never loaded
+implicitly. Without a key the UI offers no *Encrypted* switch and
+`/ui-config` reports `"encryption": false`. An instance that finds
+encrypted values in the database without a key file, or a key whose material
+differs from the one registered in the database under the same id, refuses
+to start; one that cannot decrypt a value at reload keeps serving its last
+good configuration. Every instance of an installation must have the same
+keys.
+
+**Rotation** needs no tool, only the key file and restarts, in this order on
+a multi-instance installation: add the new key as a *retired* line on every
+instance and restart them; move it to the *first* line everywhere and
+restart — the first instance to start notices the new active key in the
+key registry (`my_config_encryption_key`) and re-encrypts every stored value
+in the background without touching versions, timestamps or notifications;
+once the registry shows the new key active (`GET /encryption-status`, root
+users only, reports the sweep), delete the old line everywhere and restart.
+A key that was active once cannot become active again: rotate forward.
+
 ## Authentication
 
 Right now two authentication methods are supported:
@@ -186,6 +253,25 @@ supported) and should be treated as a foolproof only and not as a formal consist
 some parameter is deleted.
 
 To disable this foolproof, you can set `/onlineconf/disable-deleted-key-symlinks-check` to any non-empty text value other than `0`.
+
+### /onlineconf/value-encryption
+
+`/onlineconf/value-encryption` enables writing encrypted values (see
+*Encrypted values* above) when it holds a non-empty text value other than
+`0` **and** the instance has a key file. Fresh installations get it seeded
+with `1`. On an upgraded installation the parameter does not exist and the
+feature stays off — applying the schema migration alone changes nothing —
+until the operator creates it, once every instance runs a version that
+understands encrypted values and has the key file: an older instance would
+serve the stored envelope as the value. Switching it off later refuses new
+encrypted writes only; reveals and declassification (`encrypted=0`) keep
+working, so no parameter is ever trapped.
+
+`/onlineconf/value-encryption/reveal` sets who may reveal an encrypted value:
+`rw` (the default, also when the parameter is absent) requires write access
+to the parameter, `ro` lets anyone with read access reveal it. Both
+parameters are plain text, read by path, and must not be encrypted
+themselves.
 
 ## Reading a configuration from an application
 

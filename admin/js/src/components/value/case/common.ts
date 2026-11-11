@@ -6,4 +6,7 @@ export type CaseConditions = typeof caseConditions[number];
 export interface Case extends Partial<Record<CaseConditions, string>> {
 	mime: ParamType;
 	value: string | null;
+	// present (true) only on encrypted branches, so plain case values keep
+	// their historical JSON shape byte for byte
+	encrypted?: boolean;
 }
